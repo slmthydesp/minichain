@@ -148,3 +148,34 @@ func TestAppendDropsIncludedTx(t *testing.T) {
 		t.Fatal("expected second append to fail")
 	}
 }
+
+func TestAppendRejectsSkippedHeight(t *testing.T) {
+	c := New()
+	key, err := sig.ParseKey(sig.DemoKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var to Address
+	to[19] = 8
+	tx, err := Sign(key, to, 15, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(tx); err != nil {
+		t.Fatal(err)
+	}
+	block, err := c.Mine()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := block
+	skipped.Height = 2
+	follower := New()
+	if err := follower.Append(skipped); err == nil {
+		t.Fatal("expected skipped height to fail")
+	}
+	if follower.Head().Height != 0 {
+		t.Fatal("follower advanced past genesis")
+	}
+}
