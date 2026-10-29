@@ -34,6 +34,17 @@ func (tx Tx) CanonicalBytes() []byte {
 	return buf
 }
 
+func (tx Tx) Sender() (Address, error) {
+	sum := keccak(tx.SigningBytes())
+	raw, err := sig.Recover(sum[:], tx.Sig)
+	if err != nil {
+		return Address{}, ErrBadSignature
+	}
+	var addr Address
+	copy(addr[:], raw[:])
+	return addr, nil
+}
+
 func Sign(key []byte, to Address, value, nonce uint64) (Tx, error) {
 	tx := Tx{To: to, Value: value, Nonce: nonce}
 	sum := keccak(tx.SigningBytes())
