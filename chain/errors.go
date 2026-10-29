@@ -7,4 +7,6 @@ var (
 	ErrNonceTooLow         = errors.New("nonce too low")
 	ErrInsufficientBalance = errors.New("insufficient balance")
 	ErrNonceUsed           = errors.New("nonce used")
+	ErrNonceMismatch       = errors.New("nonce mismatch")
+	ErrBalanceOverflow     = errors.New("balance overflow")
 )
