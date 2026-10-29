@@ -1,12 +1,10 @@
 package chain
 
-import "golang.org/x/crypto/sha3"
+import "github.com/slmthydesp/minichain/sig"
 
 func keccak(data []byte) Hash {
-	h := sha3.NewLegacyKeccak256()
-	_, _ = h.Write(data)
-	sum := h.Sum(nil)
+	sum := sig.Keccak(data)
 	var out Hash
-	copy(out[:], sum)
+	copy(out[:], sum[:])
 	return out
 }

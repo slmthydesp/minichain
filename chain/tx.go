@@ -1,6 +1,10 @@
 package chain
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"github.com/slmthydesp/minichain/sig"
+)
 
 type Account struct {
 	Address Address
@@ -28,4 +32,15 @@ func (tx Tx) CanonicalBytes() []byte {
 	copy(buf, tx.SigningBytes())
 	copy(buf[36:], tx.Sig)
 	return buf
+}
+
+func Sign(key []byte, to Address, value, nonce uint64) (Tx, error) {
+	tx := Tx{To: to, Value: value, Nonce: nonce}
+	sum := keccak(tx.SigningBytes())
+	s, err := sig.Sign(key, sum[:])
+	if err != nil {
+		return Tx{}, err
+	}
+	tx.Sig = s
+	return tx, nil
 }
