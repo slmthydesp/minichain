@@ -112,8 +112,8 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := pool.Add(demoFirst, 100000, 0); !errors.Is(err, ErrNonceUsed) {
-		t.Fatalf("duplicate err = %v", err)
+	if err := pool.Add(demoFirst, 100000, 0); !errors.Is(err, ErrReplacementUnderpriced) {
+		t.Fatalf("replacement err = %v", err)
 	}
 	got := pool.Pending()
 	if len(got) != 3 {
@@ -146,6 +146,38 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 		if sender == droppedSender && tx.Nonce == droppedNonce {
 			t.Fatal("dropped transaction is still pending")
 		}
+	}
+}
+
+func TestPoolReplacesUnderNonceWhenGasPriceIsHigher(t *testing.T) {
+	var to Address
+	to[19] = 2
+	key := demoKey(t)
+	cheap, err := Sign(key, to, 1, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pricey, err := Sign(key, to, 1, 0, 21000, 2, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := NewPool()
+	if err := pool.Add(cheap, 100000, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add(pricey, 100000, 0); err != nil {
+		t.Fatalf("replace err = %v", err)
+	}
+	got := pool.Pending()
+	if len(got) != 1 || got[0].GasPrice != pricey.GasPrice || !bytes.Equal(got[0].Sig, pricey.Sig) {
+		t.Fatalf("pending = %+v", got)
+	}
+	if err := pool.Add(cheap, 100000, 0); !errors.Is(err, ErrReplacementUnderpriced) {
+		t.Fatalf("underpriced err = %v", err)
+	}
+	got = pool.Pending()
+	if len(got) != 1 || got[0].GasPrice != pricey.GasPrice || !bytes.Equal(got[0].Sig, pricey.Sig) {
+		t.Fatalf("after underpriced pending = %+v", got)
 	}
 }
 

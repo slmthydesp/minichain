@@ -29,9 +29,15 @@ func (p *Pool) Add(tx Tx, balance, nonce uint64) error {
 	if tx.Nonce < nonce {
 		return ErrNonceTooLow
 	}
-	for _, it := range p.items {
+	for i, it := range p.items {
 		if it.sender == sender && it.tx.Nonce == tx.Nonce {
-			return ErrNonceUsed
+			if tx.GasPrice <= it.tx.GasPrice {
+				return ErrReplacementUnderpriced
+			}
+			stored := tx
+			stored.Sig = bytes.Clone(tx.Sig)
+			p.items[i] = pooled{sender: sender, tx: stored}
+			return nil
 		}
 	}
 	stored := tx
