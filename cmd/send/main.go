@@ -41,16 +41,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "to: %v\n", err)
 		os.Exit(1)
 	}
-	tx, err := chain.Sign(key, to, *value, nonce)
+	tx, err := chain.Sign(key, to, *value, nonce, 21000, 1, chain.ChainID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sign: %v\n", err)
 		os.Exit(1)
 	}
 	body, err := json.Marshal(map[string]any{
-		"to":    tx.To.Hex(),
-		"value": tx.Value,
-		"nonce": tx.Nonce,
-		"sig":   "0x" + hex.EncodeToString(tx.Sig),
+		"to":       tx.To.Hex(),
+		"value":    tx.Value,
+		"nonce":    tx.Nonce,
+		"gasLimit": tx.GasLimit,
+		"gasPrice": tx.GasPrice,
+		"chainId":  tx.ChainID,
+		"sig":      "0x" + hex.EncodeToString(tx.Sig),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "json: %v\n", err)

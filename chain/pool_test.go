@@ -27,7 +27,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	key := demoKey(t)
 	var to Address
 	to[19] = 1
-	good, err := Sign(key, to, 10, 1)
+	good, err := Sign(key, to, 10, 1, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 		t.Fatalf("bad signature err = %v", err)
 	}
 
-	low, err := Sign(key, to, 10, 0)
+	low, err := Sign(key, to, 10, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 		t.Fatalf("low nonce err = %v", err)
 	}
 
-	poor, err := Sign(key, to, 50, 1)
+	poor, err := Sign(key, to, 50, 1, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,15 +60,15 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 	var to Address
 	to[19] = 2
-	demo, err := Sign(demoKey(t), to, 1, 1)
+	demo, err := Sign(demoKey(t), to, 1, 1, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	demoFirst, err := Sign(demoKey(t), to, 1, 0)
+	demoFirst, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := Sign(otherKey(), to, 1, 0)
+	other, err := Sign(otherKey(), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 func TestPoolCopiesSignatures(t *testing.T) {
 	var to Address
 	to[19] = 2
-	tx, err := Sign(demoKey(t), to, 1, 0)
+	tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +143,11 @@ func TestPoolCopiesSignatures(t *testing.T) {
 func TestDropClearsDiscardedSlots(t *testing.T) {
 	var to Address
 	to[19] = 2
-	first, err := Sign(demoKey(t), to, 1, 0)
+	first, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Sign(demoKey(t), to, 1, 1)
+	second, err := Sign(demoKey(t), to, 1, 1, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}

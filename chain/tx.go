@@ -12,25 +12,34 @@ type Account struct {
 	Nonce   uint64
 }
 
+const ChainID uint64 = 6666
+
 type Tx struct {
-	To    Address
-	Value uint64
-	Nonce uint64
-	Sig   []byte
+	To       Address
+	Value    uint64
+	Nonce    uint64
+	GasLimit uint64
+	GasPrice uint64
+	ChainID  uint64
+	Sig      []byte
 }
 
 func (tx Tx) SigningBytes() []byte {
-	buf := make([]byte, 36)
+	// Named fields occupy 60 bytes. The signed payload is 68, so the tail stays zero.
+	buf := make([]byte, 68)
 	copy(buf[:20], tx.To[:])
 	binary.BigEndian.PutUint64(buf[20:28], tx.Value)
 	binary.BigEndian.PutUint64(buf[28:36], tx.Nonce)
+	binary.BigEndian.PutUint64(buf[36:44], tx.GasLimit)
+	binary.BigEndian.PutUint64(buf[44:52], tx.GasPrice)
+	binary.BigEndian.PutUint64(buf[52:60], tx.ChainID)
 	return buf
 }
 
 func (tx Tx) CanonicalBytes() []byte {
-	buf := make([]byte, 101)
+	buf := make([]byte, 133)
 	copy(buf, tx.SigningBytes())
-	copy(buf[36:101], tx.Sig)
+	copy(buf[68:133], tx.Sig)
 	return buf
 }
 
@@ -45,8 +54,8 @@ func (tx Tx) Sender() (Address, error) {
 	return addr, nil
 }
 
-func Sign(key []byte, to Address, value, nonce uint64) (Tx, error) {
-	tx := Tx{To: to, Value: value, Nonce: nonce}
+func Sign(key []byte, to Address, value, nonce, gasLimit, gasPrice, chainID uint64) (Tx, error) {
+	tx := Tx{To: to, Value: value, Nonce: nonce, GasLimit: gasLimit, GasPrice: gasPrice, ChainID: chainID}
 	sum := keccak(tx.SigningBytes())
 	s, err := sig.Sign(key, sum[:])
 	if err != nil {

@@ -59,7 +59,7 @@ func TestReorgRestoresAbandonedTransfer(t *testing.T) {
 	key := demoKey(t)
 	var to Address
 	to[19] = 9
-	tx, err := Sign(key, to, 10, 0)
+	tx, err := Sign(key, to, 10, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +127,11 @@ func TestReorgDoesNotRestoreNonceSpentOnWinner(t *testing.T) {
 	var toA, toB Address
 	toA[19] = 1
 	toB[19] = 2
-	txA, err := Sign(key, toA, 1, 0)
+	txA, err := Sign(key, toA, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txB, err := Sign(key, toB, 2, 0)
+	txB, err := Sign(key, toB, 2, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}

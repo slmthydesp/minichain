@@ -23,6 +23,9 @@ func (p *Pool) Add(tx Tx, balance, nonce uint64) error {
 	if err != nil {
 		return ErrBadSignature
 	}
+	if tx.ChainID != ChainID {
+		return ErrWrongChainID
+	}
 	if tx.Nonce < nonce {
 		return ErrNonceTooLow
 	}

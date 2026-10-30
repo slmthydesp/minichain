@@ -5,6 +5,9 @@ func Apply(s *State, tx Tx) error {
 	if err != nil {
 		return ErrBadSignature
 	}
+	if tx.ChainID != ChainID {
+		return ErrWrongChainID
+	}
 	from, ok := s.Get(sender)
 	if !ok {
 		from = Account{Address: sender}

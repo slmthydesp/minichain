@@ -30,7 +30,7 @@ func TestApplyTransferUpdatesNonceAndBalances(t *testing.T) {
 	st, from := funded(t, 1000, 0)
 	var to Address
 	to[19] = 9
-	tx, err := Sign(demoKey(t), to, 40, 0)
+	tx, err := Sign(demoKey(t), to, 40, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestApplyTransferUpdatesNonceAndBalances(t *testing.T) {
 
 func TestApplySelfTransferKeepsBalance(t *testing.T) {
 	st, from := funded(t, 100, 0)
-	tx, err := Sign(demoKey(t), from, 5, 0)
+	tx, err := Sign(demoKey(t), from, 5, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,14 +74,14 @@ func TestApplyRejectsWithoutMutating(t *testing.T) {
 		want error
 	}{
 		{"nonce", func() Tx {
-			tx, err := Sign(demoKey(t), to, 1, 0)
+			tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			return tx
 		}, ErrNonceMismatch},
 		{"balance", func() Tx {
-			tx, err := Sign(demoKey(t), to, 11, 1)
+			tx, err := Sign(demoKey(t), to, 11, 1, 21000, 1, ChainID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestApplyRejectsRecipientOverflow(t *testing.T) {
 	to[19] = 4
 	st.Put(Account{Address: to, Balance: math.MaxUint64 - 1, Nonce: 0})
 	senderBefore, _ := st.Get(from)
-	tx, err := Sign(demoKey(t), to, 2, 0)
+	tx, err := Sign(demoKey(t), to, 2, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestApplyRejectsBadSignatureWithoutMutating(t *testing.T) {
 	st.Put(Account{Address: other, Balance: 4, Nonce: 1})
 	var to Address
 	to[19] = 3
-	tx, err := Sign(demoKey(t), to, 1, 0)
+	tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}

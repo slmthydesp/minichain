@@ -42,7 +42,7 @@ func TestMineAndAppend(t *testing.T) {
 	}
 	var to Address
 	to[19] = 8
-	tx, err := Sign(key, to, 15, 0)
+	tx, err := Sign(key, to, 15, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestMineLeavesGappedNonce(t *testing.T) {
 	}
 	var to Address
 	to[0] = 1
-	future, err := Sign(key, to, 1, 1)
+	future, err := Sign(key, to, 1, 1, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestAppendDropsIncludedTx(t *testing.T) {
 	}
 	var to Address
 	to[1] = 2
-	tx, err := Sign(key, to, 4, 0)
+	tx, err := Sign(key, to, 4, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestAppendRejectsSkippedHeight(t *testing.T) {
 	}
 	var to Address
 	to[19] = 8
-	tx, err := Sign(key, to, 15, 0)
+	tx, err := Sign(key, to, 15, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}

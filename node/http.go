@@ -14,10 +14,13 @@ import (
 )
 
 type txJSON struct {
-	To    string `json:"to"`
-	Value uint64 `json:"value"`
-	Nonce uint64 `json:"nonce"`
-	Sig   string `json:"sig"`
+	To       string `json:"to"`
+	Value    uint64 `json:"value"`
+	Nonce    uint64 `json:"nonce"`
+	GasLimit uint64 `json:"gasLimit"`
+	GasPrice uint64 `json:"gasPrice"`
+	ChainID  uint64 `json:"chainId"`
+	Sig      string `json:"sig"`
 }
 
 type blockJSON struct {
@@ -127,10 +130,13 @@ func encodeBlock(block chain.Block) blockJSON {
 	txs := make([]txJSON, len(block.Txs))
 	for i, tx := range block.Txs {
 		txs[i] = txJSON{
-			To:    tx.To.Hex(),
-			Value: tx.Value,
-			Nonce: tx.Nonce,
-			Sig:   "0x" + hex.EncodeToString(tx.Sig),
+			To:       tx.To.Hex(),
+			Value:    tx.Value,
+			Nonce:    tx.Nonce,
+			GasLimit: tx.GasLimit,
+			GasPrice: tx.GasPrice,
+			ChainID:  tx.ChainID,
+			Sig:      "0x" + hex.EncodeToString(tx.Sig),
 		}
 	}
 	return blockJSON{
@@ -156,7 +162,11 @@ func decodeTx(body []byte) (chain.Tx, error) {
 	if err != nil {
 		return chain.Tx{}, err
 	}
-	return chain.Tx{To: to, Value: in.Value, Nonce: in.Nonce, Sig: sigBytes}, nil
+	return chain.Tx{
+		To: to, Value: in.Value, Nonce: in.Nonce,
+		GasLimit: in.GasLimit, GasPrice: in.GasPrice, ChainID: in.ChainID,
+		Sig: sigBytes,
+	}, nil
 }
 
 func decodeBlock(in blockJSON) (chain.Block, error) {

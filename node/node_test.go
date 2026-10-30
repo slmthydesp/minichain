@@ -24,15 +24,18 @@ func signedBody(t *testing.T, nonce, value uint64) []byte {
 	}
 	var to chain.Address
 	to[19] = 1
-	tx, err := chain.Sign(key, to, value, nonce)
+	tx, err := chain.Sign(key, to, value, nonce, 21000, 1, chain.ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, err := json.Marshal(map[string]any{
-		"to":    tx.To.Hex(),
-		"value": tx.Value,
-		"nonce": tx.Nonce,
-		"sig":   "0x" + hex.EncodeToString(tx.Sig),
+		"to":       tx.To.Hex(),
+		"value":    tx.Value,
+		"nonce":    tx.Nonce,
+		"gasLimit": tx.GasLimit,
+		"gasPrice": tx.GasPrice,
+		"chainId":  tx.ChainID,
+		"sig":      "0x" + hex.EncodeToString(tx.Sig),
 	})
 	if err != nil {
 		t.Fatal(err)
