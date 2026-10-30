@@ -60,7 +60,7 @@ func TestFollowerCatchesMinerAndExitsWhenMinerStops(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if _, err := minerChain.Mine(); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,7 +101,7 @@ func TestFollowerAcceptsTransactionAndForwardsIt(t *testing.T) {
 	if len(minerChain.Pool().Pending()) != 1 || len(followerChain.Pool().Pending()) != 1 {
 		t.Fatalf("pools miner=%d follower=%d", len(minerChain.Pool().Pending()), len(followerChain.Pool().Pending()))
 	}
-	if _, err := minerChain.Mine(); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := follower.FollowOnce(context.Background()); err != nil {
@@ -188,7 +188,7 @@ func TestFollowerDropsWhenMinerRejects(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("miner status = %d", resp.StatusCode)
 	}
-	if _, err := minerChain.Mine(); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -141,7 +141,9 @@ func TestBlockHashChangesWhenContentsChange(t *testing.T) {
 	txs.Txs = []Tx{txs.Txs[0]}
 	txs.Txs[0].Sig = append([]byte(nil), txs.Txs[0].Sig...)
 	txs.Txs[0].Sig[0] ^= 0x01
-	if base.Hash() == parent.Hash() || base.Hash() == root.Hash() || base.Hash() == txs.Hash() {
-		t.Fatal("hash did not change when parent, state root, or transaction changed")
+	coinbase := base
+	coinbase.Coinbase[19] = 1
+	if base.Hash() == parent.Hash() || base.Hash() == root.Hash() || base.Hash() == txs.Hash() || base.Hash() == coinbase.Hash() {
+		t.Fatal("hash did not change when parent, state root, transaction, or coinbase changed")
 	}
 }

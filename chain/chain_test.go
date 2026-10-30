@@ -49,7 +49,7 @@ func TestMineAndAppend(t *testing.T) {
 	if _, err := c.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine()
+	block, err := c.Mine(Address{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestMineLeavesGappedNonce(t *testing.T) {
 	if _, err := c.AddTx(future); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine()
+	block, err := c.Mine(Address{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestAppendDropsIncludedTx(t *testing.T) {
 	if _, err := producer.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := producer.Mine()
+	block, err := producer.Mine(Address{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +144,11 @@ func TestAppendDropsIncludedTx(t *testing.T) {
 	if len(follower.Pool().Pending()) != 0 {
 		t.Fatal("appended transaction still pending")
 	}
-	if err := follower.Append(block); err == nil {
-		t.Fatal("expected second append to fail")
+	if err := follower.Append(block); err != nil {
+		t.Fatal(err)
+	}
+	if follower.Head().Height != 1 || len(follower.Pool().Pending()) != 0 {
+		t.Fatal("duplicate append changed the chain")
 	}
 }
 
@@ -164,7 +167,7 @@ func TestAppendRejectsSkippedHeight(t *testing.T) {
 	if _, err := c.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine()
+	block, err := c.Mine(Address{})
 	if err != nil {
 		t.Fatal(err)
 	}

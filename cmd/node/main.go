@@ -33,7 +33,7 @@ func main() {
 		n := node.NewMiner(c)
 		go func() {
 			for {
-				if _, err := c.Mine(); err != nil {
+				if _, err := c.Mine(chain.Address{}); err != nil {
 					fmt.Fprintf(os.Stderr, "mine: %v\n", err)
 					os.Exit(1)
 				}
