@@ -25,8 +25,7 @@ type Tx struct {
 }
 
 func (tx Tx) SigningBytes() []byte {
-	// Named fields occupy 60 bytes. The signed payload is 68, so the tail stays zero.
-	buf := make([]byte, 68)
+	buf := make([]byte, 60)
 	copy(buf[:20], tx.To[:])
 	binary.BigEndian.PutUint64(buf[20:28], tx.Value)
 	binary.BigEndian.PutUint64(buf[28:36], tx.Nonce)
@@ -37,9 +36,9 @@ func (tx Tx) SigningBytes() []byte {
 }
 
 func (tx Tx) CanonicalBytes() []byte {
-	buf := make([]byte, 133)
+	buf := make([]byte, 125)
 	copy(buf, tx.SigningBytes())
-	copy(buf[68:133], tx.Sig)
+	copy(buf[60:125], tx.Sig)
 	return buf
 }
 

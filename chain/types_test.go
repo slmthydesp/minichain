@@ -21,14 +21,14 @@ func TestTxSigningAndCanonicalBytes(t *testing.T) {
 	to[19] = 1
 	tx := Tx{To: to, Value: 9, Nonce: 4, Sig: bytes.Repeat([]byte{0xab}, 65)}
 	sign := tx.SigningBytes()
-	if len(sign) != 68 {
+	if len(sign) != 60 {
 		t.Fatalf("signing bytes len = %d", len(sign))
 	}
 	canon := tx.CanonicalBytes()
-	if len(canon) != 133 {
+	if len(canon) != 125 {
 		t.Fatalf("canonical len = %d", len(canon))
 	}
-	if !bytes.Equal(canon[:68], sign) || !bytes.Equal(canon[68:], tx.Sig) {
+	if !bytes.Equal(canon[:60], sign) || !bytes.Equal(canon[60:], tx.Sig) {
 		t.Fatal("canonical bytes are not signing bytes plus signature")
 	}
 	if sign[19] != 1 || sign[27] != 9 || sign[35] != 4 {
@@ -69,21 +69,21 @@ func TestParseAddressAndHashRejectBadInput(t *testing.T) {
 	}
 }
 
-func TestCanonicalBytesAreAlways133(t *testing.T) {
+func TestCanonicalBytesAreAlways125(t *testing.T) {
 	var to Address
 	to[19] = 1
 	short := Tx{To: to, Value: 1, Nonce: 2, Sig: []byte{1, 2, 3}}
 	long := Tx{To: to, Value: 1, Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
 	for _, tx := range []Tx{short, long} {
 		canon := tx.CanonicalBytes()
-		if len(canon) != 133 {
+		if len(canon) != 125 {
 			t.Fatalf("canonical len = %d", len(canon))
 		}
-		if !bytes.Equal(canon[:68], tx.SigningBytes()) {
+		if !bytes.Equal(canon[:60], tx.SigningBytes()) {
 			t.Fatal("canonical prefix is not the signing bytes")
 		}
 	}
-	if !bytes.Equal(long.CanonicalBytes()[68:], long.Sig[:65]) {
+	if !bytes.Equal(long.CanonicalBytes()[60:], long.Sig[:65]) {
 		t.Fatal("canonical signature was not the first 65 bytes")
 	}
 }
@@ -96,7 +96,7 @@ func TestSignRecoversDemoAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tx.Sig) != 65 || len(tx.CanonicalBytes()) != 133 {
+	if len(tx.Sig) != 65 || len(tx.CanonicalBytes()) != 125 {
 		t.Fatalf("sig len = %d canonical len = %d", len(tx.Sig), len(tx.CanonicalBytes()))
 	}
 	got, err := tx.Sender()

@@ -18,14 +18,14 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 		t.Fatal(err)
 	}
 	sign := tx.SigningBytes()
-	if len(sign) != 68 {
+	if len(sign) != 60 {
 		t.Fatalf("signing bytes len = %d", len(sign))
 	}
 	canon := tx.CanonicalBytes()
-	if len(canon) != 133 {
+	if len(canon) != 125 {
 		t.Fatalf("canonical len = %d", len(canon))
 	}
-	if !bytes.Equal(canon[:68], sign) || !bytes.Equal(canon[68:], tx.Sig) {
+	if !bytes.Equal(canon[:60], sign) || !bytes.Equal(canon[60:], tx.Sig) {
 		t.Fatal("canonical bytes are not signing bytes plus signature")
 	}
 	var wantField [8]byte
@@ -40,9 +40,6 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 	binary.BigEndian.PutUint64(wantField[:], 6666)
 	if !bytes.Equal(sign[52:60], wantField[:]) {
 		t.Fatalf("chain id bytes = %x", sign[52:60])
-	}
-	if !bytes.Equal(sign[60:], bytes.Repeat([]byte{0}, 8)) {
-		t.Fatalf("signing tail = %x", sign[60:])
 	}
 	got, err := tx.Sender()
 	if err != nil {
@@ -59,8 +56,8 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 	}
 
 	tx.ChainID = 6667
-	recovered, err := tx.Sender()
-	if err == nil && recovered == demo {
+	recovered, _ := tx.Sender()
+	if recovered == demo {
 		t.Fatal("chain id change still recovered the signer")
 	}
 }
