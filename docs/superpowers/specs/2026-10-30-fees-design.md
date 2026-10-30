@@ -20,7 +20,7 @@ BlockGasLimit  100000
 
 ## 交易字节
 
-签名原文 68 字节，大端：
+签名原文 60 字节，大端：
 
 ```text
 to         20
@@ -31,9 +31,9 @@ gasPrice   uint64
 chainId    uint64
 ```
 
-规范交易是签名原文加 65 字节签名，共 133 字节。`Sign` 的签名是 `func Sign(key []byte, to Address, value, nonce, gasLimit, gasPrice, chainID uint64) (Tx, error)`。
+规范交易是签名原文加 65 字节签名，共 125 字节。字段合计就是这 60 字节，后面不补零。`Sign` 的签名是 `func Sign(key []byte, to Address, value, nonce, gasLimit, gasPrice, chainID uint64) (Tx, error)`。
 
-链只接受 `chainId == 6666`。签名覆盖 chain id：改这个字段后再恢复，签名失败。用别的 chain id 签出来的合法签名，恢复成功，但准入和执行返回 `wrong chain id`。
+链只接受 `chainId == 6666`。签名覆盖 chain id、gasLimit 和 gasPrice：改其中任一字段后再恢复，得到的地址不是原签名者。紧凑恢复在消息被改后仍可能返回一个地址，那个地址属于另一把钥匙，测试只要求它不是原签名者。用别的 chain id 签出来的合法签名，恢复成功，但准入和执行返回 `wrong chain id`。
 
 ## 费用
 
@@ -68,7 +68,7 @@ coinbase       20
 gasLimit       uint64
 gasUsed        uint64
 txCount        uint32
-txs            每笔 133 字节
+txs            每笔 125 字节
 ```
 
 ## 回执
@@ -94,7 +94,7 @@ txs            每笔 133 字节
 
 ## 测试
 
-- 签名原文 68 字节，规范交易 133 字节。改 chain id、gasLimit 或 gasPrice，发送方恢复失败。
+- 签名原文 60 字节，规范交易 125 字节。改 chain id、gasLimit 或 gasPrice 后，恢复出的地址不是原签名者。
 - chain id 为 6667 的合法签名被准入拒绝，错误文本是 `wrong chain id`。
 - gasLimit 为 20999 被拒绝，错误文本是 `intrinsic gas`。
 - 一笔转账后，发送方余额减少 `value + 21000*gasPrice`，coinbase 增加 `21000*gasPrice`，收款方增加 `value`。
