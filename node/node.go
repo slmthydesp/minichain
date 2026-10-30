@@ -14,20 +14,31 @@ import (
 
 type Node struct {
 	chain  *chain.Chain
-	peer   string
+	peers  []string
 	client *http.Client
 }
 
+func New(c *chain.Chain, peers []string) *Node {
+	cleaned := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		peer = strings.TrimRight(strings.TrimSpace(peer), "/")
+		if peer != "" {
+			cleaned = append(cleaned, peer)
+		}
+	}
+	return &Node{
+		chain:  c,
+		peers:  cleaned,
+		client: &http.Client{Timeout: 5 * time.Second},
+	}
+}
+
 func NewMiner(c *chain.Chain) *Node {
-	return &Node{chain: c, client: http.DefaultClient}
+	return New(c, nil)
 }
 
 func NewFollower(c *chain.Chain, peer string) *Node {
-	return &Node{
-		chain:  c,
-		peer:   strings.TrimRight(peer, "/"),
-		client: &http.Client{Timeout: 5 * time.Second},
-	}
+	return New(c, []string{peer})
 }
 
 func (n *Node) Chain() *chain.Chain {
@@ -35,38 +46,87 @@ func (n *Node) Chain() *chain.Chain {
 }
 
 func (n *Node) FollowOnce(ctx context.Context) error {
-	if n.peer == "" {
+	if len(n.peers) == 0 {
 		return fmt.Errorf("not a follower")
 	}
-	url := fmt.Sprintf("%s/blocks?after=%d", n.peer, n.chain.Head().Height)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var first error
+	for _, peer := range n.peers {
+		if err := n.followPeer(ctx, peer); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (n *Node) followPeer(ctx context.Context, peer string) error {
+	body, status, err := n.get(ctx, peer+"/status")
 	if err != nil {
 		return err
 	}
-	resp, err := n.client.Do(req)
+	if status != http.StatusOK {
+		return fmt.Errorf("status %d: %s", status, body)
+	}
+	var head statusJSON
+	if err := json.Unmarshal(body, &head); err != nil {
+		return err
+	}
+	hash, err := chain.ParseHash(head.Head)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("blocks status %d: %s", resp.StatusCode, body)
-	}
-	var blocks []blockJSON
-	if err := json.Unmarshal(body, &blocks); err != nil {
-		return err
-	}
-	for _, item := range blocks {
-		block, err := decodeBlock(item)
+	seen := map[chain.Hash]bool{}
+	var pending []chain.Block
+	for !n.chain.Has(hash) {
+		if seen[hash] {
+			return fmt.Errorf("parent cycle")
+		}
+		seen[hash] = true
+		block, err := n.fetchBlock(ctx, peer, hash)
 		if err != nil {
 			return err
 		}
-		if err := n.chain.Append(block); err != nil {
+		pending = append(pending, block)
+		if block.Height == 0 {
+			break
+		}
+		hash = block.ParentHash
+	}
+	for i := len(pending) - 1; i >= 0; i-- {
+		if err := n.chain.Append(pending[i]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (n *Node) fetchBlock(ctx context.Context, peer string, hash chain.Hash) (chain.Block, error) {
+	body, status, err := n.get(ctx, peer+"/block?hash="+hash.Hex())
+	if err != nil {
+		return chain.Block{}, err
+	}
+	if status != http.StatusOK {
+		return chain.Block{}, fmt.Errorf("block status %d: %s", status, body)
+	}
+	var item blockJSON
+	if err := json.Unmarshal(body, &item); err != nil {
+		return chain.Block{}, err
+	}
+	return decodeBlock(item)
+}
+
+func (n *Node) get(ctx context.Context, url string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
 }

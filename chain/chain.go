@@ -57,6 +57,13 @@ func (c *Chain) Has(h Hash) bool {
 	return ok
 }
 
+func (c *Chain) Block(h Hash) (Block, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	block, ok := c.blocks[h]
+	return block, ok
+}
+
 func (c *Chain) Account(a Address) (Account, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

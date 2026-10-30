@@ -25,6 +25,7 @@ type blockJSON struct {
 	ParentHash string   `json:"parentHash"`
 	StateRoot  string   `json:"stateRoot"`
 	Hash       string   `json:"hash"`
+	Coinbase   string   `json:"coinbase"`
 	Txs        []txJSON `json:"txs"`
 }
 
@@ -38,9 +39,8 @@ func (n *Node) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /tx", n.handleTx)
 	mux.HandleFunc("GET /status", n.handleStatus)
-	if n.peer == "" {
-		mux.HandleFunc("GET /blocks", n.handleBlocks)
-	}
+	mux.HandleFunc("GET /blocks", n.handleBlocks)
+	mux.HandleFunc("GET /block", n.handleBlock)
 	return mux
 }
 
@@ -73,6 +73,21 @@ func (n *Node) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+func (n *Node) handleBlock(w http.ResponseWriter, r *http.Request) {
+	hash, err := chain.ParseHash(r.URL.Query().Get("hash"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	block, ok := n.chain.Block(hash)
+	if !ok {
+		http.Error(w, "unknown block", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(encodeBlock(block))
+}
+
 func (n *Node) handleTx(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -84,45 +99,28 @@ func (n *Node) handleTx(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	sender, err := n.chain.AddTx(tx)
-	if err != nil {
+	if _, err := n.chain.AddTx(tx); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if n.peer == "" {
-		w.WriteHeader(http.StatusNoContent)
-		return
+	for _, peer := range n.peers {
+		n.forwardTx(peer, body)
 	}
-	req, err := http.NewRequest(http.MethodPost, n.peer+"/tx", bytes.NewReader(body))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (n *Node) forwardTx(peer string, body []byte) {
+	req, err := http.NewRequest(http.MethodPost, peer+"/tx", bytes.NewReader(body))
 	if err != nil {
-		n.chain.DropTx(sender, tx.Nonce)
-		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.client.Do(req)
 	if err != nil {
-		n.chain.DropTx(sender, tx.Nonce)
-		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-	respBody, readErr := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusNoContent {
-		n.chain.DropTx(sender, tx.Nonce)
-		if readErr != nil {
-			http.Error(w, readErr.Error(), resp.StatusCode)
-			return
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(respBody)
-		return
-	}
-	if readErr != nil {
-		http.Error(w, readErr.Error(), http.StatusBadGateway)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
 func encodeBlock(block chain.Block) blockJSON {
@@ -140,6 +138,7 @@ func encodeBlock(block chain.Block) blockJSON {
 		ParentHash: block.ParentHash.Hex(),
 		StateRoot:  block.StateRoot.Hex(),
 		Hash:       block.Hash().Hex(),
+		Coinbase:   block.Coinbase.Hex(),
 		Txs:        txs,
 	}
 }
@@ -169,6 +168,10 @@ func decodeBlock(in blockJSON) (chain.Block, error) {
 	if err != nil {
 		return chain.Block{}, err
 	}
+	coinbase, err := chain.ParseAddress(in.Coinbase)
+	if err != nil {
+		return chain.Block{}, err
+	}
 	txs := make([]chain.Tx, len(in.Txs))
 	for i, item := range in.Txs {
 		raw, err := json.Marshal(item)
@@ -180,7 +183,7 @@ func decodeBlock(in blockJSON) (chain.Block, error) {
 			return chain.Block{}, err
 		}
 	}
-	block := chain.Block{Height: in.Height, ParentHash: parent, Txs: txs, StateRoot: root}
+	block := chain.Block{Height: in.Height, ParentHash: parent, Coinbase: coinbase, Txs: txs, StateRoot: root}
 	if !strings.EqualFold(block.Hash().Hex(), in.Hash) {
 		return chain.Block{}, errors.New("block hash mismatch")
 	}
