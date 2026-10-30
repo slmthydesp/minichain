@@ -33,7 +33,7 @@ func New() *Chain {
 	copy(addr[:], raw[:])
 	st := NewState()
 	st.Put(Account{Address: addr, Balance: GenesisBalance, Nonce: 0})
-	block := Block{Height: 0, StateRoot: st.Root()}
+	block := Block{Height: 0, StateRoot: st.Root(), ReceiptsRoot: ReceiptsRoot(nil)}
 	sum := block.Hash()
 	return &Chain{
 		blocks:    map[Hash]Block{sum: block},
@@ -124,6 +124,7 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 	scratch := c.state.Copy()
 	scratch.SetCoinbase(coinbase)
 	chosen := make([]Tx, 0)
+	receipts := make([]Receipt, 0)
 	var gasUsed uint64
 	remaining := BlockGasLimit
 	for i := 0; i < len(pending); {
@@ -154,6 +155,11 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 			remaining -= pending[j].GasLimit
 			gasUsed += used
 			chosen = append(chosen, pending[j])
+			receipts = append(receipts, Receipt{
+				Status:            1,
+				GasUsed:           used,
+				CumulativeGasUsed: gasUsed,
+			})
 			nonce++
 			j++
 		}
@@ -171,13 +177,15 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 	}
 	head := c.blocks[c.canonical]
 	block := Block{
-		Height:     head.Height + 1,
-		ParentHash: c.canonical,
-		Coinbase:   coinbase,
-		GasLimit:   BlockGasLimit,
-		GasUsed:    gasUsed,
-		Txs:        chosen,
-		StateRoot:  scratch.Root(),
+		Height:       head.Height + 1,
+		ParentHash:   c.canonical,
+		Coinbase:     coinbase,
+		GasLimit:     BlockGasLimit,
+		GasUsed:      gasUsed,
+		Txs:          chosen,
+		StateRoot:    scratch.Root(),
+		ReceiptsRoot: ReceiptsRoot(receipts),
+		Receipts:     receipts,
 	}
 	sum := block.Hash()
 	c.blocks[sum] = block
@@ -202,14 +210,27 @@ func (c *Chain) Append(b Block) error {
 	}
 	scratch := c.states[b.ParentHash].Copy()
 	scratch.SetCoinbase(b.Coinbase)
+	var gasUsed uint64
+	receipts := make([]Receipt, 0, len(b.Txs))
 	for _, tx := range b.Txs {
-		if _, err := Apply(scratch, tx); err != nil {
+		used, err := Apply(scratch, tx)
+		if err != nil {
 			return err
 		}
+		gasUsed += used
+		receipts = append(receipts, Receipt{
+			Status:            1,
+			GasUsed:           used,
+			CumulativeGasUsed: gasUsed,
+		})
 	}
 	if scratch.Root() != b.StateRoot {
 		return errors.New("bad state root")
 	}
+	if ReceiptsRoot(receipts) != b.ReceiptsRoot {
+		return errors.New("bad receipts root")
+	}
+	b.Receipts = receipts
 	c.blocks[sum] = b
 	c.states[sum] = scratch
 	c.adopt(c.best())

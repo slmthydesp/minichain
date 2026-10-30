@@ -269,3 +269,87 @@ func TestBlockHashBindsGas(t *testing.T) {
 		t.Fatal("hash ignored gas limit or gas used")
 	}
 }
+
+func TestMineReceiptsRootMatchesTransactions(t *testing.T) {
+	c := New()
+	key := demoKey(t)
+	var to Address
+	to[19] = 9
+	for nonce, value := range []uint64{4, 6} {
+		tx, err := Sign(key, to, value, uint64(nonce), 21000, 1, ChainID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.AddTx(tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	block, err := c.Mine(Address{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recomputed := receiptsFromTransfers(block.Txs)
+	if len(recomputed) != 2 || recomputed[0].CumulativeGasUsed != 21000 || recomputed[1].CumulativeGasUsed != 42000 {
+		t.Fatalf("recomputed = %+v", recomputed)
+	}
+	if block.ReceiptsRoot != ReceiptsRoot(recomputed) {
+		t.Fatalf("receipts root = %s", block.ReceiptsRoot.Hex())
+	}
+	flipped := block
+	flipped.ReceiptsRoot[0] ^= 0x01
+	if flipped.Hash() == block.Hash() {
+		t.Fatal("hash ignored receipts root")
+	}
+	withoutList := block
+	withoutList.Receipts = nil
+	if withoutList.Hash() != block.Hash() {
+		t.Fatal("hash included the receipt list")
+	}
+	if len(block.Receipts) != len(recomputed) {
+		t.Fatalf("receipts = %+v", block.Receipts)
+	}
+	for i := range recomputed {
+		if block.Receipts[i] != recomputed[i] {
+			t.Fatalf("receipt %d = %+v", i, block.Receipts[i])
+		}
+	}
+}
+
+func TestAppendRejectsBadReceiptsRoot(t *testing.T) {
+	c := New()
+	key := demoKey(t)
+	var to Address
+	to[19] = 8
+	tx, err := Sign(key, to, 15, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(tx); err != nil {
+		t.Fatal(err)
+	}
+	block, err := c.Mine(Address{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block.ReceiptsRoot[0] ^= 0x01
+	follower := New()
+	if err := follower.Append(block); err == nil {
+		t.Fatal("expected bad receipts root to fail")
+	}
+	if follower.Head().Height != 0 {
+		t.Fatal("follower advanced past genesis")
+	}
+	if _, ok := follower.Account(to); ok {
+		t.Fatal("rejected block changed state")
+	}
+}
+
+func receiptsFromTransfers(txs []Tx) []Receipt {
+	out := make([]Receipt, len(txs))
+	var cumulative uint64
+	for i := range txs {
+		cumulative += IntrinsicGas
+		out[i] = Receipt{Status: 1, GasUsed: IntrinsicGas, CumulativeGasUsed: cumulative}
+	}
+	return out
+}

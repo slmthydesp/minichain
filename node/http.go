@@ -23,15 +23,23 @@ type txJSON struct {
 	Sig      string `json:"sig"`
 }
 
+type receiptJSON struct {
+	Status            uint64 `json:"status"`
+	GasUsed           uint64 `json:"gasUsed"`
+	CumulativeGasUsed uint64 `json:"cumulativeGasUsed"`
+}
+
 type blockJSON struct {
-	Height     uint64   `json:"height"`
-	ParentHash string   `json:"parentHash"`
-	StateRoot  string   `json:"stateRoot"`
-	Hash       string   `json:"hash"`
-	Coinbase   string   `json:"coinbase"`
-	GasLimit   uint64   `json:"gasLimit"`
-	GasUsed    uint64   `json:"gasUsed"`
-	Txs        []txJSON `json:"txs"`
+	Height       uint64        `json:"height"`
+	ParentHash   string        `json:"parentHash"`
+	StateRoot    string        `json:"stateRoot"`
+	ReceiptsRoot string        `json:"receiptsRoot"`
+	Hash         string        `json:"hash"`
+	Coinbase     string        `json:"coinbase"`
+	GasLimit     uint64        `json:"gasLimit"`
+	GasUsed      uint64        `json:"gasUsed"`
+	Txs          []txJSON      `json:"txs"`
+	Receipts     []receiptJSON `json:"receipts"`
 }
 
 type statusJSON struct {
@@ -141,15 +149,25 @@ func encodeBlock(block chain.Block) blockJSON {
 			Sig:      "0x" + hex.EncodeToString(tx.Sig),
 		}
 	}
+	receipts := make([]receiptJSON, len(block.Receipts))
+	for i, receipt := range block.Receipts {
+		receipts[i] = receiptJSON{
+			Status:            receipt.Status,
+			GasUsed:           receipt.GasUsed,
+			CumulativeGasUsed: receipt.CumulativeGasUsed,
+		}
+	}
 	return blockJSON{
-		Height:     block.Height,
-		ParentHash: block.ParentHash.Hex(),
-		StateRoot:  block.StateRoot.Hex(),
-		Hash:       block.Hash().Hex(),
-		Coinbase:   block.Coinbase.Hex(),
-		GasLimit:   block.GasLimit,
-		GasUsed:    block.GasUsed,
-		Txs:        txs,
+		Height:       block.Height,
+		ParentHash:   block.ParentHash.Hex(),
+		StateRoot:    block.StateRoot.Hex(),
+		ReceiptsRoot: block.ReceiptsRoot.Hex(),
+		Hash:         block.Hash().Hex(),
+		Coinbase:     block.Coinbase.Hex(),
+		GasLimit:     block.GasLimit,
+		GasUsed:      block.GasUsed,
+		Txs:          txs,
+		Receipts:     receipts,
 	}
 }
 
@@ -182,6 +200,13 @@ func decodeBlock(in blockJSON) (chain.Block, error) {
 	if err != nil {
 		return chain.Block{}, err
 	}
+	var receiptsRoot chain.Hash
+	if in.ReceiptsRoot != "" {
+		receiptsRoot, err = chain.ParseHash(in.ReceiptsRoot)
+		if err != nil {
+			return chain.Block{}, err
+		}
+	}
 	coinbase, err := chain.ParseAddress(in.Coinbase)
 	if err != nil {
 		return chain.Block{}, err
@@ -197,9 +222,18 @@ func decodeBlock(in blockJSON) (chain.Block, error) {
 			return chain.Block{}, err
 		}
 	}
+	receipts := make([]chain.Receipt, len(in.Receipts))
+	for i, receipt := range in.Receipts {
+		receipts[i] = chain.Receipt{
+			Status:            receipt.Status,
+			GasUsed:           receipt.GasUsed,
+			CumulativeGasUsed: receipt.CumulativeGasUsed,
+		}
+	}
 	block := chain.Block{
 		Height: in.Height, ParentHash: parent, Coinbase: coinbase,
 		GasLimit: in.GasLimit, GasUsed: in.GasUsed, Txs: txs, StateRoot: root,
+		ReceiptsRoot: receiptsRoot, Receipts: receipts,
 	}
 	if !strings.EqualFold(block.Hash().Hex(), in.Hash) {
 		return chain.Block{}, errors.New("block hash mismatch")
