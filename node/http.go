@@ -29,6 +29,8 @@ type blockJSON struct {
 	StateRoot  string   `json:"stateRoot"`
 	Hash       string   `json:"hash"`
 	Coinbase   string   `json:"coinbase"`
+	GasLimit   uint64   `json:"gasLimit"`
+	GasUsed    uint64   `json:"gasUsed"`
 	Txs        []txJSON `json:"txs"`
 }
 
@@ -145,6 +147,8 @@ func encodeBlock(block chain.Block) blockJSON {
 		StateRoot:  block.StateRoot.Hex(),
 		Hash:       block.Hash().Hex(),
 		Coinbase:   block.Coinbase.Hex(),
+		GasLimit:   block.GasLimit,
+		GasUsed:    block.GasUsed,
 		Txs:        txs,
 	}
 }
@@ -193,7 +197,10 @@ func decodeBlock(in blockJSON) (chain.Block, error) {
 			return chain.Block{}, err
 		}
 	}
-	block := chain.Block{Height: in.Height, ParentHash: parent, Coinbase: coinbase, Txs: txs, StateRoot: root}
+	block := chain.Block{
+		Height: in.Height, ParentHash: parent, Coinbase: coinbase,
+		GasLimit: in.GasLimit, GasUsed: in.GasUsed, Txs: txs, StateRoot: root,
+	}
 	if !strings.EqualFold(block.Hash().Hex(), in.Hash) {
 		return chain.Block{}, errors.New("block hash mismatch")
 	}

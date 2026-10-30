@@ -8,6 +8,7 @@ import (
 
 type State struct {
 	accounts map[Address]Account
+	coinbase Address
 }
 
 func NewState() *State {
@@ -16,10 +17,15 @@ func NewState() *State {
 
 func (s *State) Copy() *State {
 	next := NewState()
+	next.coinbase = s.coinbase
 	for k, v := range s.accounts {
 		next.accounts[k] = v
 	}
 	return next
+}
+
+func (s *State) SetCoinbase(a Address) {
+	s.coinbase = a
 }
 
 func (s *State) Get(a Address) (Account, bool) {

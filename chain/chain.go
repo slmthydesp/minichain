@@ -122,7 +122,10 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 	defer c.mu.Unlock()
 	pending := c.pool.Pending()
 	scratch := c.state.Copy()
+	scratch.SetCoinbase(coinbase)
 	chosen := make([]Tx, 0)
+	var gasUsed uint64
+	remaining := BlockGasLimit
 	for i := 0; i < len(pending); {
 		sender, err := pending[i].Sender()
 		if err != nil {
@@ -141,9 +144,15 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 			if pending[j].Nonce != nonce {
 				break
 			}
-			if err := Apply(scratch, pending[j]); err != nil {
+			if pending[j].GasLimit > remaining {
 				break
 			}
+			used, err := Apply(scratch, pending[j])
+			if err != nil {
+				break
+			}
+			remaining -= pending[j].GasLimit
+			gasUsed += used
 			chosen = append(chosen, pending[j])
 			nonce++
 			j++
@@ -165,6 +174,8 @@ func (c *Chain) Mine(coinbase Address) (Block, error) {
 		Height:     head.Height + 1,
 		ParentHash: c.canonical,
 		Coinbase:   coinbase,
+		GasLimit:   BlockGasLimit,
+		GasUsed:    gasUsed,
 		Txs:        chosen,
 		StateRoot:  scratch.Root(),
 	}
@@ -190,8 +201,9 @@ func (c *Chain) Append(b Block) error {
 		return errors.New("bad height")
 	}
 	scratch := c.states[b.ParentHash].Copy()
+	scratch.SetCoinbase(b.Coinbase)
 	for _, tx := range b.Txs {
-		if err := Apply(scratch, tx); err != nil {
+		if _, err := Apply(scratch, tx); err != nil {
 			return err
 		}
 	}

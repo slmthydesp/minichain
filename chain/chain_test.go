@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/slmthydesp/minichain/sig"
@@ -180,5 +181,91 @@ func TestAppendRejectsSkippedHeight(t *testing.T) {
 	}
 	if follower.Head().Height != 0 {
 		t.Fatal("follower advanced past genesis")
+	}
+}
+
+func TestMineStopsWhenBlockGasIsFull(t *testing.T) {
+	c := New()
+	demo := demoKey(t)
+	other := otherKey()
+	otherRaw, err := sig.KeyAddress(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var otherAddr Address
+	copy(otherAddr[:], otherRaw[:])
+	demoRaw, err := sig.KeyAddress(demo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var demoAddr Address
+	copy(demoAddr[:], demoRaw[:])
+
+	fund, err := Sign(demo, otherAddr, 100000, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(fund); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Mine(Address{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var sink Address
+	sink[19] = 4
+	earlierKey, earlierNonce := demo, uint64(1)
+	laterKey, laterNonce := other, uint64(0)
+	if bytes.Compare(otherAddr[:], demoAddr[:]) < 0 {
+		earlierKey, earlierNonce = other, 0
+		laterKey, laterNonce = demo, 1
+	}
+	first, err := Sign(earlierKey, sink, 1, earlierNonce, 60000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Sign(earlierKey, sink, 1, earlierNonce+1, 50000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := Sign(laterKey, sink, 1, laterNonce, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range []Tx{second, third, first} {
+		if _, err := c.AddTx(tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var coin Address
+	coin[19] = 3
+	block, err := c.Mine(coin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.GasLimit != BlockGasLimit {
+		t.Fatalf("gas limit = %d", block.GasLimit)
+	}
+	if block.GasUsed != 42000 || len(block.Txs) != 2 {
+		t.Fatalf("gas used = %d txs = %d", block.GasUsed, len(block.Txs))
+	}
+	pending := c.Pool().Pending()
+	if len(pending) != 1 || pending[0].GasLimit != 50000 || pending[0].Nonce != earlierNonce+1 {
+		t.Fatalf("pending = %+v", pending)
+	}
+	paid, ok := c.Account(coin)
+	if !ok || paid.Balance != 42000 {
+		t.Fatalf("coinbase = %+v ok=%v", paid, ok)
+	}
+}
+
+func TestBlockHashBindsGas(t *testing.T) {
+	base := Block{ParentHash: Hash{1}, StateRoot: Hash{2}, Coinbase: Address{19: 1}}
+	limit := base
+	limit.GasLimit = BlockGasLimit
+	used := base
+	used.GasUsed = IntrinsicGas
+	if base.Hash() == limit.Hash() || base.Hash() == used.Hash() {
+		t.Fatal("hash ignored gas limit or gas used")
 	}
 }

@@ -43,7 +43,7 @@ curl -s http://127.0.0.1:8546/status
 
 ## 发一笔转账
 
-演示私钥是 `ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`，地址是 `0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266`，创世余额 `1000000`。`--key` 不写就用这把钥匙。
+演示私钥是 `ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`，地址是 `0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266`，创世余额 `1000000`。`--key` 不写就用这把钥匙。`--gas-limit` 默认 `21000`，`--gas-price` 默认 `1`。
 
 发给任一进程。本机收下就返回 `204`，并把同一份 JSON 转给 `--peers`。对方拒绝或连不上，本机仍保留这笔交易。
 

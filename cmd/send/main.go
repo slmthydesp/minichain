@@ -20,6 +20,8 @@ func main() {
 	toHex := flag.String("to", "", "recipient address")
 	value := flag.Uint64("value", 0, "amount")
 	nonceStr := flag.String("nonce", "", "account nonce")
+	gasLimit := flag.Uint64("gas-limit", 21000, "gas limit")
+	gasPrice := flag.Uint64("gas-price", 1, "gas price")
 	keyHex := flag.String("key", sig.DemoKeyHex, "hex private key")
 	flag.Parse()
 	if *url == "" || *toHex == "" || *nonceStr == "" {
@@ -41,7 +43,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "to: %v\n", err)
 		os.Exit(1)
 	}
-	tx, err := chain.Sign(key, to, *value, nonce, 21000, 1, chain.ChainID)
+	tx, err := chain.Sign(key, to, *value, nonce, *gasLimit, *gasPrice, chain.ChainID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sign: %v\n", err)
 		os.Exit(1)

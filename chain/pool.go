@@ -23,14 +23,11 @@ func (p *Pool) Add(tx Tx, balance, nonce uint64) error {
 	if err != nil {
 		return ErrBadSignature
 	}
-	if tx.ChainID != ChainID {
-		return ErrWrongChainID
+	if err := checkTx(tx, balance); err != nil {
+		return err
 	}
 	if tx.Nonce < nonce {
 		return ErrNonceTooLow
-	}
-	if tx.Value > balance {
-		return ErrInsufficientBalance
 	}
 	for _, it := range p.items {
 		if it.sender == sender && it.tx.Nonce == tx.Nonce {

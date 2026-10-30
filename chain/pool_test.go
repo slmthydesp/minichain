@@ -36,7 +36,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	badSig.Sig = bytes.Clone(good.Sig)
 	badSig.Sig[0] = 0
 	pool := NewPool()
-	if err := pool.Add(badSig, 100, 0); !errors.Is(err, ErrBadSignature) {
+	if err := pool.Add(badSig, 100000, 0); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("bad signature err = %v", err)
 	}
 
@@ -44,7 +44,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.Add(low, 100, 1); !errors.Is(err, ErrNonceTooLow) {
+	if err := pool.Add(low, 100000, 1); !errors.Is(err, ErrNonceTooLow) {
 		t.Fatalf("low nonce err = %v", err)
 	}
 
@@ -54,6 +54,40 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	}
 	if err := pool.Add(poor, 40, 1); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("balance err = %v", err)
+	}
+
+	fee, err := Sign(key, to, 10, 1, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add(fee, 21009, 1); !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatalf("fee err = %v", err)
+	}
+}
+
+func TestPoolRejectsFeeOverflow(t *testing.T) {
+	key := demoKey(t)
+	var to Address
+	to[19] = 1
+	product, err := Sign(key, to, 1, 0, ^uint64(0), 2, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewPool().Add(product, ^uint64(0), 0); !errors.Is(err, ErrBalanceOverflow) {
+		t.Fatalf("product err = %v", err)
+	}
+	price := ^uint64(0) / IntrinsicGas
+	reserved := IntrinsicGas * price
+	sum, err := Sign(key, to, ^uint64(0)-reserved+1, 0, IntrinsicGas, price, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewPool().Add(sum, ^uint64(0), 0); !errors.Is(err, ErrBalanceOverflow) {
+		t.Fatalf("sum err = %v", err)
+	}
+	st, _ := funded(t, ^uint64(0), 0)
+	if _, err := Apply(st, sum); !errors.Is(err, ErrBalanceOverflow) {
+		t.Fatalf("apply err = %v", err)
 	}
 }
 
@@ -74,11 +108,11 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 	}
 	pool := NewPool()
 	for _, tx := range []Tx{demo, other, demoFirst} {
-		if err := pool.Add(tx, 100, 0); err != nil {
+		if err := pool.Add(tx, 100000, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := pool.Add(demoFirst, 100, 0); !errors.Is(err, ErrNonceUsed) {
+	if err := pool.Add(demoFirst, 100000, 0); !errors.Is(err, ErrNonceUsed) {
 		t.Fatalf("duplicate err = %v", err)
 	}
 	got := pool.Pending()
@@ -125,7 +159,7 @@ func TestPoolCopiesSignatures(t *testing.T) {
 	caller := bytes.Clone(tx.Sig)
 	tx.Sig = caller
 	pool := NewPool()
-	if err := pool.Add(tx, 100, 0); err != nil {
+	if err := pool.Add(tx, 100000, 0); err != nil {
 		t.Fatal(err)
 	}
 	caller[0] ^= 0xff
@@ -153,7 +187,7 @@ func TestDropClearsDiscardedSlots(t *testing.T) {
 	}
 	pool := NewPool()
 	for _, tx := range []Tx{first, second} {
-		if err := pool.Add(tx, 100, 0); err != nil {
+		if err := pool.Add(tx, 100000, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

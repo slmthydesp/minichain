@@ -76,7 +76,7 @@ func TestPoolRejectsWrongChainID(t *testing.T) {
 	if err := NewPool().Add(tx, 100, 0); !errors.Is(err, ErrWrongChainID) {
 		t.Fatalf("pool err = %v", err)
 	}
-	if err := Apply(NewState(), tx); !errors.Is(err, ErrWrongChainID) {
+	if _, err := Apply(NewState(), tx); !errors.Is(err, ErrWrongChainID) {
 		t.Fatalf("apply err = %v", err)
 	}
 }
