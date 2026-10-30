@@ -62,7 +62,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "body: %v\n", err)
+		os.Exit(1)
+	}
 	if resp.StatusCode != http.StatusNoContent {
 		fmt.Fprintf(os.Stderr, "status %d: %s\n", resp.StatusCode, respBody)
 		os.Exit(1)

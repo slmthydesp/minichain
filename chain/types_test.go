@@ -3,6 +3,8 @@ package chain
 import (
 	"bytes"
 	"testing"
+
+	"github.com/slmthydesp/minichain/sig"
 )
 
 func TestAccountFieldsRoundTrip(t *testing.T) {
@@ -49,6 +51,69 @@ func TestParseAddressAndHash(t *testing.T) {
 	}
 	if h.Hex() != "0x"+hexHash {
 		t.Fatalf("hash hex = %s", h.Hex())
+	}
+}
+
+func TestParseAddressAndHashRejectBadInput(t *testing.T) {
+	if _, err := ParseAddress("0xzz"); err == nil {
+		t.Fatal("expected address decode error")
+	}
+	if _, err := ParseAddress("0x01"); err == nil {
+		t.Fatal("expected address length error")
+	}
+	if _, err := ParseHash("0xzz"); err == nil {
+		t.Fatal("expected hash decode error")
+	}
+	if _, err := ParseHash("0xab"); err == nil {
+		t.Fatal("expected hash length error")
+	}
+}
+
+func TestCanonicalBytesAreAlways101(t *testing.T) {
+	var to Address
+	to[19] = 1
+	short := Tx{To: to, Value: 1, Nonce: 2, Sig: []byte{1, 2, 3}}
+	long := Tx{To: to, Value: 1, Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
+	for _, tx := range []Tx{short, long} {
+		canon := tx.CanonicalBytes()
+		if len(canon) != 101 {
+			t.Fatalf("canonical len = %d", len(canon))
+		}
+		if !bytes.Equal(canon[:36], tx.SigningBytes()) {
+			t.Fatal("canonical prefix is not the signing bytes")
+		}
+	}
+	if !bytes.Equal(long.CanonicalBytes()[36:], long.Sig[:65]) {
+		t.Fatal("canonical signature was not the first 65 bytes")
+	}
+}
+
+func TestSignRecoversDemoAddress(t *testing.T) {
+	key := demoKey(t)
+	var to Address
+	to[19] = 1
+	tx, err := Sign(key, to, 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.Sig) != 65 || len(tx.CanonicalBytes()) != 101 {
+		t.Fatalf("sig len = %d canonical len = %d", len(tx.Sig), len(tx.CanonicalBytes()))
+	}
+	got, err := tx.Sender()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sig.KeyAddress(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want Address
+	copy(want[:], raw[:])
+	if got != want || tx.Value != 10 || tx.Nonce != 3 || tx.To != to {
+		t.Fatalf("signed tx = %+v sender = %s", tx, got.Hex())
+	}
+	if _, err := Sign([]byte{1}, to, 1, 0); err == nil {
+		t.Fatal("expected sign error for a short key")
 	}
 }
 

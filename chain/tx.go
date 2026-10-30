@@ -28,9 +28,9 @@ func (tx Tx) SigningBytes() []byte {
 }
 
 func (tx Tx) CanonicalBytes() []byte {
-	buf := make([]byte, 36+len(tx.Sig))
+	buf := make([]byte, 101)
 	copy(buf, tx.SigningBytes())
-	copy(buf[36:], tx.Sig)
+	copy(buf[36:101], tx.Sig)
 	return buf
 }
 

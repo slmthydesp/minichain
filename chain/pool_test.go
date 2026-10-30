@@ -98,8 +98,80 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 			}
 		}
 	}
-	pool.Drop(senders[0], got[0].Nonce)
-	if len(pool.Pending()) != 2 {
-		t.Fatalf("after drop pending = %d", len(pool.Pending()))
+	droppedSender, droppedNonce := senders[0], got[0].Nonce
+	pool.Drop(droppedSender, droppedNonce)
+	left := pool.Pending()
+	if len(left) != 2 {
+		t.Fatalf("after drop pending = %d", len(left))
+	}
+	for _, tx := range left {
+		sender, err := tx.Sender()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sender == droppedSender && tx.Nonce == droppedNonce {
+			t.Fatal("dropped transaction is still pending")
+		}
+	}
+}
+
+func TestPoolCopiesSignatures(t *testing.T) {
+	var to Address
+	to[19] = 2
+	tx, err := Sign(demoKey(t), to, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := bytes.Clone(tx.Sig)
+	tx.Sig = caller
+	pool := NewPool()
+	if err := pool.Add(tx, 100, 0); err != nil {
+		t.Fatal(err)
+	}
+	caller[0] ^= 0xff
+	stored := pool.Pending()
+	if len(stored) != 1 || bytes.Equal(stored[0].Sig, caller) {
+		t.Fatal("pool kept the caller's signature slice")
+	}
+	stored[0].Sig[0] ^= 0xff
+	again := pool.Pending()
+	if bytes.Equal(again[0].Sig, stored[0].Sig) {
+		t.Fatal("pending returned the pool's signature slice")
+	}
+}
+
+func TestDropClearsDiscardedSlots(t *testing.T) {
+	var to Address
+	to[19] = 2
+	first, err := Sign(demoKey(t), to, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Sign(demoKey(t), to, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := NewPool()
+	for _, tx := range []Tx{first, second} {
+		if err := pool.Add(tx, 100, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender, err := first.Sender()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Drop(sender, first.Nonce)
+	if cap(pool.items) <= len(pool.items) {
+		t.Fatal("drop left no spare slot to check")
+	}
+	for _, it := range pool.items[:cap(pool.items)][len(pool.items):] {
+		if it.tx.Sig != nil || it.tx.Nonce != 0 || it.tx.Value != 0 {
+			t.Fatal("dropped transaction is still reachable past the pool length")
+		}
+	}
+	left := pool.Pending()
+	if len(left) != 1 || left[0].Nonce != second.Nonce {
+		t.Fatalf("remaining = %+v", left)
 	}
 }

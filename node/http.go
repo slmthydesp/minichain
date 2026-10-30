@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/slmthydesp/minichain/chain"
@@ -57,10 +57,12 @@ func (n *Node) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (n *Node) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	var after uint64
 	if raw := r.URL.Query().Get("after"); raw != "" {
-		if _, err := fmt.Sscan(raw, &after); err != nil {
+		n, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		after = n
 	}
 	blocks := n.chain.BlocksAfter(after)
 	out := make([]blockJSON, 0, len(blocks))
@@ -105,11 +107,19 @@ func (n *Node) handleTx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusNoContent {
 		n.chain.DropTx(sender, tx.Nonce)
+		if readErr != nil {
+			http.Error(w, readErr.Error(), resp.StatusCode)
+			return
+		}
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(respBody)
+		return
+	}
+	if readErr != nil {
+		http.Error(w, readErr.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

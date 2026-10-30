@@ -54,3 +54,23 @@ func TestStateRootChangesOnPutModifyDelete(t *testing.T) {
 		t.Fatal("zero-balance account was omitted")
 	}
 }
+
+func TestCopyAndBalanceNonce(t *testing.T) {
+	addr := Address{19: 3}
+	st := NewState()
+	st.Put(Account{Address: addr, Balance: 8, Nonce: 2})
+	copied := st.Copy()
+	copied.Put(Account{Address: addr, Balance: 1, Nonce: 9})
+	balance, nonce := st.BalanceNonce(addr)
+	if balance != 8 || nonce != 2 {
+		t.Fatalf("original balance=%d nonce=%d", balance, nonce)
+	}
+	copiedBalance, copiedNonce := copied.BalanceNonce(addr)
+	if copiedBalance != 1 || copiedNonce != 9 {
+		t.Fatalf("copy balance=%d nonce=%d", copiedBalance, copiedNonce)
+	}
+	missingBalance, missingNonce := st.BalanceNonce(Address{19: 9})
+	if missingBalance != 0 || missingNonce != 0 {
+		t.Fatalf("missing balance=%d nonce=%d", missingBalance, missingNonce)
+	}
+}

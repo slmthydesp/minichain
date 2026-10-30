@@ -90,7 +90,11 @@ func (c *Chain) Mine() (Block, error) {
 	defer c.mu.Unlock()
 	pending := c.pool.Pending()
 	scratch := c.state.Copy()
-	chosen := make([]Tx, 0)
+	type mined struct {
+		sender Address
+		tx     Tx
+	}
+	chosen := make([]mined, 0)
 	for i := 0; i < len(pending); {
 		sender, err := pending[i].Sender()
 		if err != nil {
@@ -112,7 +116,7 @@ func (c *Chain) Mine() (Block, error) {
 			if err := Apply(scratch, pending[j]); err != nil {
 				break
 			}
-			chosen = append(chosen, pending[j])
+			chosen = append(chosen, mined{sender: txSender, tx: pending[j]})
 			nonce++
 			j++
 		}
@@ -128,18 +132,16 @@ func (c *Chain) Mine() (Block, error) {
 		}
 		i = j
 	}
-	for _, tx := range chosen {
-		sender, err := tx.Sender()
-		if err != nil {
-			return Block{}, err
-		}
-		c.pool.Drop(sender, tx.Nonce)
+	txs := make([]Tx, len(chosen))
+	for i, item := range chosen {
+		c.pool.Drop(item.sender, item.tx.Nonce)
+		txs[i] = item.tx
 	}
 	head := c.blocks[len(c.blocks)-1]
 	block := Block{
 		Height:     head.Height + 1,
 		ParentHash: head.Hash(),
-		Txs:        chosen,
+		Txs:        txs,
 		StateRoot:  scratch.Root(),
 	}
 	c.blocks = append(c.blocks, block)
@@ -158,22 +160,24 @@ func (c *Chain) Append(b Block) error {
 		return errors.New("bad height")
 	}
 	scratch := c.state.Copy()
-	for _, tx := range b.Txs {
+	senders := make([]Address, len(b.Txs))
+	for i, tx := range b.Txs {
+		sender, err := tx.Sender()
+		if err != nil {
+			return err
+		}
 		if err := Apply(scratch, tx); err != nil {
 			return err
 		}
+		senders[i] = sender
 	}
 	if scratch.Root() != b.StateRoot {
 		return errors.New("bad state root")
 	}
 	c.blocks = append(c.blocks, b)
 	c.state = scratch
-	for _, tx := range b.Txs {
-		sender, err := tx.Sender()
-		if err != nil {
-			return err
-		}
-		c.pool.Drop(sender, tx.Nonce)
+	for i, tx := range b.Txs {
+		c.pool.Drop(senders[i], tx.Nonce)
 	}
 	return nil
 }

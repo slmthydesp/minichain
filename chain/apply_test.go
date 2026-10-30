@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"testing"
@@ -102,10 +103,11 @@ func TestApplyRejectsWithoutMutating(t *testing.T) {
 }
 
 func TestApplyRejectsRecipientOverflow(t *testing.T) {
-	st, _ := funded(t, 10, 0)
+	st, from := funded(t, 10, 0)
 	var to Address
 	to[19] = 4
 	st.Put(Account{Address: to, Balance: math.MaxUint64 - 1, Nonce: 0})
+	senderBefore, _ := st.Get(from)
 	tx, err := Sign(demoKey(t), to, 2, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +116,39 @@ func TestApplyRejectsRecipientOverflow(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	got, _ := st.Get(to)
-	if got.Balance != math.MaxUint64-1 {
-		t.Fatalf("recipient balance = %d", got.Balance)
+	if got.Balance != math.MaxUint64-1 || got.Nonce != 0 {
+		t.Fatalf("recipient = %+v", got)
+	}
+	senderAfter, _ := st.Get(from)
+	if senderAfter != senderBefore {
+		t.Fatalf("sender changed to %+v", senderAfter)
+	}
+}
+
+func TestApplyRejectsBadSignatureWithoutMutating(t *testing.T) {
+	st, from := funded(t, 10, 0)
+	var other Address
+	other[19] = 8
+	st.Put(Account{Address: other, Balance: 4, Nonce: 1})
+	var to Address
+	to[19] = 3
+	tx, err := Sign(demoKey(t), to, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Sig = bytes.Clone(tx.Sig)
+	tx.Sig[0] = 0
+	senderBefore, _ := st.Get(from)
+	otherBefore, _ := st.Get(other)
+	if err := Apply(st, tx); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("err = %v", err)
+	}
+	senderAfter, _ := st.Get(from)
+	otherAfter, _ := st.Get(other)
+	if senderAfter != senderBefore || otherAfter != otherBefore {
+		t.Fatal("bad signature changed state")
+	}
+	if _, ok := st.Get(to); ok {
+		t.Fatal("bad signature created the recipient")
 	}
 }

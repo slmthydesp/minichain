@@ -34,7 +34,9 @@ func (p *Pool) Add(tx Tx, balance, nonce uint64) error {
 			return ErrNonceUsed
 		}
 	}
-	p.items = append(p.items, pooled{sender: sender, tx: tx})
+	stored := tx
+	stored.Sig = bytes.Clone(tx.Sig)
+	p.items = append(p.items, pooled{sender: sender, tx: stored})
 	return nil
 }
 
@@ -49,17 +51,22 @@ func (p *Pool) Pending() []Tx {
 	out := make([]Tx, len(items))
 	for i, it := range items {
 		out[i] = it.tx
+		out[i].Sig = bytes.Clone(it.tx.Sig)
 	}
 	return out
 }
 
 func (p *Pool) Drop(sender Address, nonce uint64) {
+	n := len(p.items)
 	kept := p.items[:0]
 	for _, it := range p.items {
 		if it.sender == sender && it.tx.Nonce == nonce {
 			continue
 		}
 		kept = append(kept, it)
+	}
+	for i := len(kept); i < n; i++ {
+		p.items[i] = pooled{}
 	}
 	p.items = kept
 }

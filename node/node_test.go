@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/slmthydesp/minichain/chain"
@@ -109,5 +112,150 @@ func TestFollowerAcceptsTransactionAndForwardsIt(t *testing.T) {
 	}
 	if len(minerChain.Pool().Pending()) != 0 || len(followerChain.Pool().Pending()) != 0 {
 		t.Fatal("transaction remained in a pool")
+	}
+}
+
+func TestStatusReportsLocalHead(t *testing.T) {
+	c := chain.New()
+	srv := httptest.NewServer(NewMiner(c).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Height    uint64 `json:"height"`
+		StateRoot string `json:"stateRoot"`
+		Head      string `json:"head"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	head := c.Head()
+	if got.Height != head.Height || got.StateRoot != head.StateRoot.Hex() || got.Head != head.Hash().Hex() {
+		t.Fatalf("status = %+v", got)
+	}
+}
+
+func TestBlocksRejectsTrailingAfter(t *testing.T) {
+	srv := httptest.NewServer(NewMiner(chain.New()).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/blocks?after=12abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestFollowerRejectsLocallyWithoutForwarding(t *testing.T) {
+	minerChain := chain.New()
+	minerSrv := httptest.NewServer(NewMiner(minerChain).Handler())
+	t.Cleanup(minerSrv.Close)
+	followerChain := chain.New()
+	followerSrv := httptest.NewServer(NewFollower(followerChain, minerSrv.URL).Handler())
+	t.Cleanup(followerSrv.Close)
+
+	var payload map[string]any
+	if err := json.Unmarshal(signedBody(t, 0, 7), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["sig"] = "0x" + strings.Repeat("00", 65)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := postTx(t, followerSrv.URL, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if len(minerChain.Pool().Pending()) != 0 || len(followerChain.Pool().Pending()) != 0 {
+		t.Fatal("rejected transaction was kept or forwarded")
+	}
+}
+
+func TestFollowerDropsWhenMinerRejects(t *testing.T) {
+	minerChain := chain.New()
+	minerSrv := httptest.NewServer(NewMiner(minerChain).Handler())
+	t.Cleanup(minerSrv.Close)
+	body := signedBody(t, 0, 5)
+	resp := postTx(t, minerSrv.URL, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("miner status = %d", resp.StatusCode)
+	}
+	if _, err := minerChain.Mine(); err != nil {
+		t.Fatal(err)
+	}
+
+	followerChain := chain.New()
+	followerSrv := httptest.NewServer(NewFollower(followerChain, minerSrv.URL).Handler())
+	t.Cleanup(followerSrv.Close)
+	resp = postTx(t, followerSrv.URL, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if len(followerChain.Pool().Pending()) != 0 {
+		t.Fatal("follower kept a transaction the miner rejected")
+	}
+}
+
+func TestFollowerDropsWhenMinerUnreachable(t *testing.T) {
+	minerSrv := httptest.NewServer(http.NotFoundHandler())
+	url := minerSrv.URL
+	minerSrv.Close()
+	followerChain := chain.New()
+	followerSrv := httptest.NewServer(NewFollower(followerChain, url).Handler())
+	t.Cleanup(followerSrv.Close)
+	resp := postTx(t, followerSrv.URL, signedBody(t, 0, 1))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if len(followerChain.Pool().Pending()) != 0 {
+		t.Fatal("follower kept a transaction it could not forward")
+	}
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestFollowerReportsBodyReadError(t *testing.T) {
+	followerChain := chain.New()
+	follower := NewFollower(followerChain, "http://miner.invalid")
+	follower.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(errReader{errors.New("read failed")}),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	srv := httptest.NewServer(follower.Handler())
+	t.Cleanup(srv.Close)
+	resp := postTx(t, srv.URL, signedBody(t, 0, 1))
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("read failed")) {
+		t.Fatalf("body = %s", body)
+	}
+	if len(followerChain.Pool().Pending()) != 0 {
+		t.Fatal("follower kept a transaction after a failed forward read")
 	}
 }
