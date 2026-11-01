@@ -18,14 +18,14 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 		t.Fatal(err)
 	}
 	sign := tx.SigningBytes()
-	if len(sign) != 60 {
+	if len(sign) != 64 {
 		t.Fatalf("signing bytes len = %d", len(sign))
 	}
 	canon := tx.CanonicalBytes()
-	if len(canon) != 125 {
+	if len(canon) != 129 {
 		t.Fatalf("canonical len = %d", len(canon))
 	}
-	if !bytes.Equal(canon[:60], sign) || !bytes.Equal(canon[60:], tx.Sig) {
+	if !bytes.Equal(canon[:64], sign) || !bytes.Equal(canon[64:], tx.Sig) {
 		t.Fatal("canonical bytes are not signing bytes plus signature")
 	}
 	var wantField [8]byte
@@ -59,6 +59,35 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 	recovered, _ := tx.Sender()
 	if recovered == demo {
 		t.Fatal("chain id change still recovered the signer")
+	}
+}
+
+func TestCreateOmitsToAndZeroAddressIsACall(t *testing.T) {
+	key := demoKey(t)
+	call, err := Sign(key, Address{}, 10, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.Create {
+		t.Fatal("zero address was signed as create")
+	}
+	sign := call.SigningBytes()
+	if len(sign) != 64 || !bytes.Equal(sign[:20], make([]byte, 20)) {
+		t.Fatalf("zero-address signing len = %d prefix = %x", len(sign), sign[:min(20, len(sign))])
+	}
+	create, err := SignCreate(key, 10, 0, 53000, 1, ChainID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !create.Create {
+		t.Fatal("create flag was not set")
+	}
+	created := create.SigningBytes()
+	if len(created) != 44 {
+		t.Fatalf("create signing len = %d", len(created))
+	}
+	if bytes.Equal(sign, created) {
+		t.Fatal("create and a call to the zero address signed the same bytes")
 	}
 }
 

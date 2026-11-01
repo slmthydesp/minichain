@@ -63,7 +63,7 @@ func TestFollowerCatchesMinerAndErrorsWhenMinerStops(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if _, err := minerChain.Mine(chain.Address{}); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}, minerChain.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,7 +104,7 @@ func TestFollowerAcceptsTransactionAndForwardsIt(t *testing.T) {
 	if len(minerChain.Pool().Pending()) != 1 || len(followerChain.Pool().Pending()) != 1 {
 		t.Fatalf("pools miner=%d follower=%d", len(minerChain.Pool().Pending()), len(followerChain.Pool().Pending()))
 	}
-	if _, err := minerChain.Mine(chain.Address{}); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}, minerChain.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := follower.FollowOnce(context.Background()); err != nil {
@@ -191,7 +191,7 @@ func TestFollowerDropsWhenMinerRejects(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("miner status = %d", resp.StatusCode)
 	}
-	if _, err := minerChain.Mine(chain.Address{}); err != nil {
+	if _, err := minerChain.Mine(chain.Address{}, minerChain.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,17 +275,17 @@ func TestFollowerSwitchesToLongerFork(t *testing.T) {
 	chainA := chain.New()
 	srvA := httptest.NewServer(NewMiner(chainA).Handler())
 	t.Cleanup(srvA.Close)
-	if _, err := chainA.Mine(coinA); err != nil {
+	if _, err := chainA.Mine(coinA, chainA.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 
 	chainB := chain.New()
 	srvB := httptest.NewServer(NewMiner(chainB).Handler())
 	t.Cleanup(srvB.Close)
-	if _, err := chainB.Mine(coinB); err != nil {
+	if _, err := chainB.Mine(coinB, chainB.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := chainB.Mine(coinB); err != nil {
+	if _, err := chainB.Mine(coinB, chainB.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,4 +308,82 @@ func TestFollowerSwitchesToLongerFork(t *testing.T) {
 	if !followerChain.Has(chainA.Head().Hash()) {
 		t.Fatal("shorter fork was discarded")
 	}
+}
+
+func TestAccountReportsBalanceAndNonce(t *testing.T) {
+	c := chain.New()
+	srv := httptest.NewServer(NewMiner(c).Handler())
+	t.Cleanup(srv.Close)
+
+	demo := "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+	got := getAccount(t, srv.URL, demo)
+	if got.Address != demo || got.Balance != chain.GenesisBalance || got.Nonce != 0 {
+		t.Fatalf("genesis account = %+v", got)
+	}
+
+	missing := getAccount(t, srv.URL, "0x0000000000000000000000000000000000000001")
+	if missing.Address != "0x0000000000000000000000000000000000000001" || missing.Balance != 0 || missing.Nonce != 0 {
+		t.Fatalf("missing account = %+v", missing)
+	}
+
+	resp, err := http.Get(srv.URL + "/account?address=zz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad address status = %d", resp.StatusCode)
+	}
+
+	post := postTx(t, srv.URL, signedBody(t, 0, 20))
+	post.Body.Close()
+	if post.StatusCode != http.StatusNoContent {
+		t.Fatalf("tx status = %d", post.StatusCode)
+	}
+	pending := getAccount(t, srv.URL, demo)
+	if pending.Nonce != 0 || pending.NextNonce != 1 {
+		t.Fatalf("pending = %+v", pending)
+	}
+	if _, err := c.Mine(chain.Address{}, c.Head().Time+1); err != nil {
+		t.Fatal(err)
+	}
+	sender := getAccount(t, srv.URL, "0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266")
+	if sender.Address != demo || sender.Balance != chain.GenesisBalance-20-21000 || sender.Nonce != 1 || sender.NextNonce != 1 {
+		t.Fatalf("sender = %+v", sender)
+	}
+	recipient := getAccount(t, srv.URL, "0x0000000000000000000000000000000000000001")
+	if recipient.Balance != 20 || recipient.Nonce != 0 {
+		t.Fatalf("recipient = %+v", recipient)
+	}
+}
+
+func getAccount(t *testing.T, rawURL, address string) struct {
+	Address   string `json:"address"`
+	Balance   uint64 `json:"balance"`
+	Nonce     uint64 `json:"nonce"`
+	NextNonce uint64 `json:"nextNonce"`
+} {
+	t.Helper()
+	resp, err := http.Get(rawURL + "/account?address=" + address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("type %q", ct)
+	}
+	var got struct {
+		Address   string `json:"address"`
+		Balance   uint64 `json:"balance"`
+		Nonce     uint64 `json:"nonce"`
+		NextNonce uint64 `json:"nextNonce"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
 }

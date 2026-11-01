@@ -34,6 +34,55 @@ func TestNewGenesisFundsDemoAccount(t *testing.T) {
 	}
 }
 
+func TestNextNonceSkipsPending(t *testing.T) {
+	c := New()
+	key, err := sig.ParseKey(sig.DemoKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sig.KeyAddress(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sender Address
+	copy(sender[:], raw[:])
+	if c.NextNonce(sender) != 0 {
+		t.Fatal("empty next nonce")
+	}
+	var to Address
+	to[19] = 1
+	future, err := Sign(key, to, 1, 2, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(future); err != nil {
+		t.Fatal(err)
+	}
+	if c.NextNonce(sender) != 0 {
+		t.Fatal("gap should stay open")
+	}
+	first, err := Sign(key, to, 1, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(first); err != nil {
+		t.Fatal(err)
+	}
+	if c.NextNonce(sender) != 1 {
+		t.Fatal("nonce 0 is taken")
+	}
+	second, err := Sign(key, to, 1, 1, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(second); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.NextNonce(sender); got != 3 {
+		t.Fatalf("next = %d", got)
+	}
+}
+
 func TestMineAndAppend(t *testing.T) {
 	c := New()
 	parent := c.Head().Hash()
@@ -50,7 +99,7 @@ func TestMineAndAppend(t *testing.T) {
 	if _, err := c.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine(Address{})
+	block, err := c.Mine(Address{}, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +153,7 @@ func TestMineLeavesGappedNonce(t *testing.T) {
 	if _, err := c.AddTx(future); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine(Address{})
+	block, err := c.Mine(Address{}, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +180,7 @@ func TestAppendDropsIncludedTx(t *testing.T) {
 	if _, err := producer.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := producer.Mine(Address{})
+	block, err := producer.Mine(Address{}, producer.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +217,7 @@ func TestAppendRejectsSkippedHeight(t *testing.T) {
 	if _, err := c.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine(Address{})
+	block, err := c.Mine(Address{}, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,14 +250,14 @@ func TestMineStopsWhenBlockGasIsFull(t *testing.T) {
 	var demoAddr Address
 	copy(demoAddr[:], demoRaw[:])
 
-	fund, err := Sign(demo, otherAddr, 100000, 0, 21000, 1, ChainID)
+	fund, err := Sign(demo, otherAddr, 400000, 0, 21000, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.AddTx(fund); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Mine(Address{}); err != nil {
+	if _, err := c.Mine(Address{}, c.Head().Time+1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +288,7 @@ func TestMineStopsWhenBlockGasIsFull(t *testing.T) {
 	}
 	var coin Address
 	coin[19] = 3
-	block, err := c.Mine(coin)
+	block, err := c.Mine(coin, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,8 +314,12 @@ func TestBlockHashBindsGas(t *testing.T) {
 	limit.GasLimit = BlockGasLimit
 	used := base
 	used.GasUsed = IntrinsicGas
-	if base.Hash() == limit.Hash() || base.Hash() == used.Hash() {
-		t.Fatal("hash ignored gas limit or gas used")
+	tall := base
+	tall.Height = 1
+	late := base
+	late.Time = 1
+	if base.Hash() == limit.Hash() || base.Hash() == used.Hash() || base.Hash() == tall.Hash() || base.Hash() == late.Hash() {
+		t.Fatal("hash ignored gas, height, or timestamp")
 	}
 }
 
@@ -284,7 +337,7 @@ func TestMineReceiptsRootMatchesTransactions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	block, err := c.Mine(Address{})
+	block, err := c.Mine(Address{}, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +347,14 @@ func TestMineReceiptsRootMatchesTransactions(t *testing.T) {
 	}
 	if block.ReceiptsRoot != ReceiptsRoot(recomputed) {
 		t.Fatalf("receipts root = %s", block.ReceiptsRoot.Hex())
+	}
+	if block.TransactionsRoot != TransactionsRoot(block.Txs) {
+		t.Fatalf("transactions root = %s", block.TransactionsRoot.Hex())
+	}
+	withoutTxs := block
+	withoutTxs.Txs = nil
+	if withoutTxs.Hash() != block.Hash() {
+		t.Fatal("hash included the raw transactions")
 	}
 	flipped := block
 	flipped.ReceiptsRoot[0] ^= 0x01
@@ -309,8 +370,9 @@ func TestMineReceiptsRootMatchesTransactions(t *testing.T) {
 		t.Fatalf("receipts = %+v", block.Receipts)
 	}
 	for i := range recomputed {
-		if block.Receipts[i] != recomputed[i] {
-			t.Fatalf("receipt %d = %+v", i, block.Receipts[i])
+		got, want := block.Receipts[i], recomputed[i]
+		if got.Status != want.Status || got.GasUsed != want.GasUsed || got.CumulativeGasUsed != want.CumulativeGasUsed || len(got.Logs) != len(want.Logs) {
+			t.Fatalf("receipt %d = %+v", i, got)
 		}
 	}
 }
@@ -327,7 +389,7 @@ func TestAppendRejectsBadReceiptsRoot(t *testing.T) {
 	if _, err := c.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	block, err := c.Mine(Address{})
+	block, err := c.Mine(Address{}, c.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +403,134 @@ func TestAppendRejectsBadReceiptsRoot(t *testing.T) {
 	}
 	if _, ok := follower.Account(to); ok {
 		t.Fatal("rejected block changed state")
+	}
+}
+
+func TestMineRejectsTimestampNotAfterParent(t *testing.T) {
+	c := New()
+	if _, err := c.Mine(Address{}, 0); err == nil || err.Error() != "bad timestamp" {
+		t.Fatalf("timestamp err = %v", err)
+	}
+	if _, err := c.Mine(Address{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Mine(Address{}, 1); err == nil || err.Error() != "bad timestamp" {
+		t.Fatalf("equal timestamp err = %v", err)
+	}
+}
+
+func TestAppendChecksTimestampGasLimitAndGasUsed(t *testing.T) {
+	c := New()
+	block, err := c.Mine(Address{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower := New()
+	early := block
+	early.Time = 0
+	if err := follower.Append(early); err == nil || err.Error() != "bad timestamp" {
+		t.Fatalf("timestamp err = %v", err)
+	}
+	limited := block
+	limited.GasLimit = 1
+	if err := follower.Append(limited); err == nil || err.Error() != "bad gas limit" {
+		t.Fatalf("gas limit err = %v", err)
+	}
+	used := block
+	used.GasUsed = 1
+	if err := follower.Append(used); err == nil || err.Error() != "bad gas used" {
+		t.Fatalf("gas used err = %v", err)
+	}
+	if follower.Head().Height != 0 {
+		t.Fatal("rejected block advanced the head")
+	}
+	if err := follower.Append(block); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppendRejectsGasLimitSumOverBlock(t *testing.T) {
+	c := New()
+	var to Address
+	to[19] = 4
+	first, err := Sign(demoKey(t), to, 1, 0, 60000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Sign(demoKey(t), to, 1, 1, 60000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := c.Head()
+	block := Block{
+		Height:           parent.Height + 1,
+		ParentHash:       parent.Hash(),
+		GasLimit:         BlockGasLimit,
+		GasUsed:          IntrinsicGas * 2,
+		Time:             parent.Time + 1,
+		Txs:              []Tx{first, second},
+		TransactionsRoot: TransactionsRoot([]Tx{first, second}),
+	}
+	if err := c.Append(block); err == nil || err.Error() != "block gas exceeded" {
+		t.Fatalf("err = %v", err)
+	}
+	if c.Head().Height != 0 || c.Has(block.Hash()) {
+		t.Fatal("over-gas block was stored")
+	}
+}
+
+func TestMinePacksHigherGasPriceFirst(t *testing.T) {
+	c := New()
+	demo := demoKey(t)
+	other := otherKey()
+	demoRaw, err := sig.KeyAddress(demo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRaw, err := sig.KeyAddress(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var demoAddr, otherAddr Address
+	copy(demoAddr[:], demoRaw[:])
+	copy(otherAddr[:], otherRaw[:])
+	fund, err := Sign(demo, otherAddr, 400000, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AddTx(fund); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Mine(Address{}, c.Head().Time+1); err != nil {
+		t.Fatal(err)
+	}
+	cheapKey, priceyKey := demo, other
+	cheapNonce, priceyNonce := uint64(1), uint64(0)
+	if bytes.Compare(demoAddr[:], otherAddr[:]) > 0 {
+		priceyKey, cheapKey = demo, other
+		priceyNonce, cheapNonce = 1, 0
+	}
+	var sink Address
+	sink[19] = 7
+	cheap, err := Sign(cheapKey, sink, 1, cheapNonce, 60000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pricey, err := Sign(priceyKey, sink, 1, priceyNonce, 60000, 5, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range []Tx{cheap, pricey} {
+		if _, err := c.AddTx(tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	block, err := c.Mine(Address{19: 3}, c.Head().Time+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(block.Txs) != 1 || block.Txs[0].GasPrice != 5 {
+		t.Fatalf("packed %+v", block.Txs)
 	}
 }
 

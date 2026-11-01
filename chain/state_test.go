@@ -3,16 +3,11 @@ package chain
 import "testing"
 
 func TestEmptyStateRoot(t *testing.T) {
-	want := keccak(nil)
-	if NewState().Root() != want {
+	if NewState().Root() != emptyTrieRoot() {
 		t.Fatalf("empty root = %s", NewState().Root().Hex())
 	}
-	parsed, err := ParseHash("0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want != parsed {
-		t.Fatalf("keccak(nil) = %s", want.Hex())
+	if emptyTrieRoot().Hex() != emptyTrieRootHex {
+		t.Fatalf("empty trie = %s", emptyTrieRoot().Hex())
 	}
 }
 

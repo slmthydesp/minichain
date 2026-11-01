@@ -228,16 +228,86 @@ func TestDropClearsDiscardedSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool.Drop(sender, first.Nonce)
-	if cap(pool.items) <= len(pool.items) {
-		t.Fatal("drop left no spare slot to check")
-	}
-	for _, it := range pool.items[:cap(pool.items)][len(pool.items):] {
-		if it.tx.Sig != nil || it.tx.Nonce != 0 || it.tx.Value != 0 {
-			t.Fatal("dropped transaction is still reachable past the pool length")
-		}
+	if _, ok := pool.bySender[sender][first.Nonce]; ok {
+		t.Fatal("dropped nonce is still stored")
 	}
 	left := pool.Pending()
 	if len(left) != 1 || left[0].Nonce != second.Nonce {
 		t.Fatalf("remaining = %+v", left)
+	}
+}
+
+func TestPoolReservesBalanceForOtherPendingTxs(t *testing.T) {
+	key := demoKey(t)
+	var to Address
+	to[19] = 2
+	first, err := Sign(key, to, 979000, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Sign(key, to, 979000, 1, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 这个例子把余额钉在 1000000，用来卡住两笔预留。创世余额是 1 个币，放得下这两笔。
+	const balance uint64 = 1000000
+	pool := NewPool()
+	if err := pool.Add(first, balance, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add(second, balance, 0); !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatalf("second err = %v", err)
+	}
+	if len(pool.Pending()) != 1 {
+		t.Fatal("over-balance transaction was stored")
+	}
+	one, err := Sign(key, to, 1, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := Sign(key, to, 1, 1, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	affordable := NewPool()
+	if err := affordable.Add(one, balance, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := affordable.Add(two, balance, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPoolReplacementMustStillFitWithSiblings(t *testing.T) {
+	key := demoKey(t)
+	var to Address
+	to[19] = 2
+	cheap, err := Sign(key, to, 1, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := Sign(key, to, 500000, 1, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooBig, err := Sign(key, to, 500000, 0, 21000, 2, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 替换后的预留加上同账户另一笔，会超过这个 1000000。创世余额放得下。
+	const balance uint64 = 1000000
+	pool := NewPool()
+	if err := pool.Add(cheap, balance, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add(sibling, balance, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Add(tooBig, balance, 0); !errors.Is(err, ErrInsufficientBalance) {
+		t.Fatalf("replacement err = %v", err)
+	}
+	pending := pool.Pending()
+	if len(pending) != 2 || pending[0].GasPrice != 1 || pending[0].Nonce != 0 {
+		t.Fatalf("pending = %+v", pending)
 	}
 }

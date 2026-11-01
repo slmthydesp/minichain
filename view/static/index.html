@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>规范链</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1b2832;
+      --rail: #1f6f78;
+      --paper: #f3f6f4;
+      --sheet: #d5e0dc;
+      --warn: #8a3d2f;
+    }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--sheet);
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+    }
+    header, #empty, #columns, #balances { padding-left: 1.25rem; padding-right: 1.25rem; }
+    h1 { font-size: 2rem; font-weight: 600; margin: 0; }
+    .title-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.25rem 0 0.75rem; }
+    h2 { font-size: 1.35rem; font-weight: 600; margin: 0.25rem 0 0.6rem; }
+    form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    input, button { font: inherit; color: inherit; }
+    input {
+      min-width: 16rem;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--ink);
+      background: var(--paper);
+    }
+    button {
+      padding: 0.35rem 0.7rem;
+      border: 1px solid var(--ink);
+      background: var(--paper);
+      cursor: pointer;
+    }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--rail); outline-offset: 2px; }
+    #form-error, #balance-error { min-height: 1.2em; color: var(--warn); }
+    #balances { padding-bottom: 0.5rem; }
+    #balance-list { display: flex; flex-wrap: wrap; gap: 0.75rem; padding-bottom: 1rem; }
+    .watch { flex: 0 0 22rem; background: var(--paper); border: 1px solid var(--ink); padding: 0.55rem 0.7rem; }
+    .watch p { margin: 0.2rem 0; overflow-wrap: anywhere; }
+    .watch .addr { font-size: 0.8rem; }
+    #empty { font-size: 1.15rem; }
+    #columns {
+      display: flex;
+      gap: 1.25rem;
+      overflow-x: auto;
+      align-items: flex-start;
+      padding-bottom: 2rem;
+    }
+    .col { flex: 0 0 18rem; }
+    .col-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+    .addr { font-family: ui-monospace, monospace; font-size: 0.85rem; overflow-wrap: anywhere; }
+    .err { color: var(--warn); margin: 0.25rem 0; }
+    .block { background: var(--paper); border: 1px solid var(--ink); }
+    .block > button {
+      display: flex;
+      width: 100%;
+      justify-content: space-between;
+      gap: 0.5rem;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }
+    .join { width: 2px; height: 14px; margin: 0 auto; background: var(--rail); }
+    .detail { padding: 0.4rem 0.6rem 0.7rem; overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    .more { margin-top: 0.6rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title-row">
+      <h1>规范链</h1>
+      <button type="button" id="monitor" aria-pressed="true">暂停监控</button>
+    </div>
+    <form id="add-form">
+      <input id="node" name="node" placeholder="127.0.0.1:8545" autocomplete="off">
+      <button type="submit">添加</button>
+    </form>
+    <p id="form-error" role="alert"></p>
+  </header>
+  <section id="balances">
+    <h2>余额</h2>
+    <form id="balance-form">
+      <input id="balance-node" name="node" placeholder="127.0.0.1:8545" autocomplete="off">
+      <input id="balance-address" name="address" placeholder="0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266" autocomplete="off">
+      <button type="submit">订阅</button>
+    </form>
+    <p id="balance-error" role="alert"></p>
+    <p id="balance-empty">订阅一个进程上的地址，每 3 秒更新余额和 nonce</p>
+    <div id="balance-list"></div>
+  </section>
+  <p id="empty">添加一个出块进程的地址</p>
+  <div id="columns"></div>
+  <script>
+    const storageKey = "minichain.view.nodes";
+    const balanceKey = "minichain.view.accounts";
+    const blockWindow = 50;
+    const balanceInterval = 3000;
+    let monitoring = true;
+    let monitorEpoch = 0;
+    const state = new Map();
+    const watchState = new Map();
+    let nodes = loadNodes();
+    let watches = loadWatches();
+
+    function loadNodes() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
+        if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return [];
+        return parsed;
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveNodes() {
+      localStorage.setItem(storageKey, JSON.stringify(nodes));
+    }
+
+    function loadWatches() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(balanceKey) || "[]");
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((item) => item && typeof item.node === "string" && typeof item.address === "string");
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveWatches() {
+      localStorage.setItem(balanceKey, JSON.stringify(watches));
+    }
+
+    function watchKey(node, address) {
+      return node + " " + address;
+    }
+
+    function canonicalAddress(raw) {
+      let body = String(raw).trim();
+      if (body.startsWith("0x") || body.startsWith("0X")) body = body.slice(2);
+      if (!/^[0-9a-fA-F]{40}$/.test(body)) return null;
+      return "0x" + body.toLowerCase();
+    }
+
+    function formatBalance(n) {
+      const digits = String(n);
+      const padded = digits.padStart(19, "0");
+      const whole = padded.slice(0, -18).replace(/^0+/, "") || "0";
+      const frac = padded.slice(-18).replace(/0+$/, "");
+      const coins = frac === "" ? whole + " 个币" : whole + "." + frac + " 个币";
+      return coins + "（" + digits + "）";
+    }
+
+    function validAccount(v) {
+      return !!v && typeof v === "object" && !Array.isArray(v) &&
+        typeof v.address === "string" && isWideUint(v.balance) && isWideUint(v.nonce);
+    }
+
+    function blank() {
+      return { inflight: false, error: "", status: null, blocks: null, openHash: "" };
+    }
+
+    function canonicalNode(raw) {
+      let trimmed = String(raw).trim();
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith("https://")) trimmed = trimmed.slice(8);
+      else if (lower.startsWith("http://")) trimmed = trimmed.slice(7);
+      if (trimmed.endsWith("/")) trimmed = trimmed.slice(0, -1);
+      let host = "";
+      let port = "";
+      if (trimmed.startsWith("[")) {
+        const end = trimmed.indexOf("]");
+        if (end <= 1 || trimmed[end + 1] !== ":") return null;
+        host = trimmed.slice(1, end);
+        port = trimmed.slice(end + 2);
+      } else {
+        const i = trimmed.lastIndexOf(":");
+        if (i <= 0) return null;
+        host = trimmed.slice(0, i);
+        port = trimmed.slice(i + 1);
+        if (host.includes(":")) return null;
+      }
+      if (!host || /[@/\\\s?#%]/.test(host)) return null;
+      if (!/^[0-9]+$/.test(port)) return null;
+      const n = Number(port);
+      if (!Number.isSafeInteger(n) || n < 1 || n > 65535) return null;
+      if (host.includes(":")) return "[" + host + "]:" + n;
+      return host + ":" + n;
+    }
+
+    function isUint(n) {
+      return Number.isSafeInteger(n) && n >= 0;
+    }
+
+    // 1 个币是 10^18，超过 JavaScript 能精确表示的整数。这样的数先留成十进制字符串。
+    function isWideUint(n) {
+      if (isUint(n)) return true;
+      if (typeof n !== "string" || !/^(0|[1-9][0-9]*)$/.test(n)) return false;
+      if (n.length < 20) return true;
+      if (n.length > 20) return false;
+      return n <= "18446744073709551615";
+    }
+
+    function parseBody(text) {
+      const quoted = text.replace(/([:\[,]\s*)(\d{16,})(\s*[,}\]])/g, (match, lead, digits, tail) => {
+        if (!isWideUint(digits)) return match;
+        return lead + '"' + digits + '"' + tail;
+      });
+      return JSON.parse(quoted);
+    }
+
+    function validStatus(v) {
+      return !!v && typeof v === "object" && !Array.isArray(v) &&
+        isUint(v.height) && typeof v.stateRoot === "string" && typeof v.head === "string";
+    }
+
+    function validBlocks(v) {
+      if (!Array.isArray(v)) return false;
+      return v.every((block) => block && typeof block === "object" &&
+        isUint(block.height) &&
+        typeof block.parentHash === "string" &&
+        typeof block.stateRoot === "string" &&
+        typeof block.hash === "string" &&
+        typeof block.coinbase === "string" &&
+        Array.isArray(block.txs) &&
+        block.txs.every((tx) => tx && typeof tx.to === "string" && isWideUint(tx.value) && isWideUint(tx.nonce)));
+    }
+
+    function abbrev(raw) {
+      const original = String(raw);
+      let body = original;
+      if (body.startsWith("0x") || body.startsWith("0X")) body = body.slice(2);
+      const shown = body.length >= 12 ? body.slice(0, 8) + "…" + body.slice(-4) : body;
+      return { shown, original };
+    }
+
+    function el(tag, text, className) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    async function readJSON(res) {
+      try {
+        return { value: parseBody(await res.text()), ok: true };
+      } catch (err) {
+        return { value: null, ok: false };
+      }
+    }
+
+    function stillWatching(epoch) {
+      return monitoring && epoch === monitorEpoch;
+    }
+
+    async function refresh(node) {
+      if (!monitoring) return;
+      const epoch = monitorEpoch;
+      const col = state.get(node);
+      if (!col || col.inflight) return;
+      col.inflight = true;
+      try {
+        let statusRes;
+        try {
+          statusRes = await fetch("/api/status?node=" + encodeURIComponent(node), { cache: "no-store" });
+        } catch (err) {
+          if (!stillWatching(epoch)) return;
+          col.error = "连不上";
+          render();
+          return;
+        }
+        if (!stillWatching(epoch)) return;
+        if (statusRes.status === 502) {
+          col.error = "连不上";
+          render();
+          return;
+        }
+        if (statusRes.status !== 200) {
+          col.error = String(statusRes.status);
+          render();
+          return;
+        }
+        const statusRead = await readJSON(statusRes);
+        if (!stillWatching(epoch)) return;
+        if (!statusRead.ok || !validStatus(statusRead.value)) {
+          col.error = "回应无法解析";
+          render();
+          return;
+        }
+        const height = statusRead.value.height;
+        const after = height <= blockWindow ? 0 : height - blockWindow;
+        let blocksRes;
+        try {
+          blocksRes = await fetch("/api/blocks?node=" + encodeURIComponent(node) + "&after=" + after, { cache: "no-store" });
+        } catch (err) {
+          if (!stillWatching(epoch)) return;
+          col.error = "连不上";
+          render();
+          return;
+        }
+        if (!stillWatching(epoch)) return;
+        if (blocksRes.status === 502) {
+          col.error = "连不上";
+          render();
+          return;
+        }
+        if (blocksRes.status !== 200) {
+          col.error = String(blocksRes.status);
+          render();
+          return;
+        }
+        const blocksRead = await readJSON(blocksRes);
+        if (!stillWatching(epoch)) return;
+        if (!blocksRead.ok || !validBlocks(blocksRead.value)) {
+          col.error = "回应无法解析";
+          render();
+          return;
+        }
+        col.error = "";
+        col.status = statusRead.value;
+        col.blocks = blocksRead.value;
+        if (col.openHash && !col.blocks.some((block) => block.hash === col.openHash)) col.openHash = "";
+        render();
+      } finally {
+        if (epoch === monitorEpoch) col.inflight = false;
+      }
+    }
+
+    function removeNode(node) {
+      nodes = nodes.filter((item) => item !== node);
+      state.delete(node);
+      saveNodes();
+      render();
+    }
+
+    function render() {
+      document.getElementById("empty").hidden = nodes.length > 0;
+      const root = document.getElementById("columns");
+      const sel = window.getSelection();
+      const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      if (range && sel.anchorNode && root.contains(sel.anchorNode) && range.toString() !== "") return;
+      const scrollLeft = root.scrollLeft;
+      root.replaceChildren();
+      for (const node of nodes) {
+        const col = state.get(node);
+        const column = el("section", null, "col");
+        const top = el("div", null, "col-head");
+        top.append(el("span", node, "addr"));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "移除";
+        remove.addEventListener("click", () => removeNode(node));
+        top.append(remove);
+        column.append(top);
+        if (col.error) column.append(el("p", col.error, "err"));
+        if (col.status) {
+          const head = abbrev(col.status.head);
+          const rootHash = abbrev(col.status.stateRoot);
+          column.append(el("p", "高度 " + col.status.height));
+          const headLine = el("p", "链头 " + head.shown);
+          headLine.title = head.original;
+          column.append(headLine);
+          const rootLine = el("p", "状态根 " + rootHash.shown);
+          rootLine.title = rootHash.original;
+          column.append(rootLine);
+          const blocks = col.blocks.slice().sort((a, b) => b.height - a.height);
+          blocks.forEach((block, index) => {
+            const item = el("div", null, "block");
+            const hash = abbrev(block.hash);
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.title = hash.original;
+            btn.append(
+              el("span", String(block.height)),
+              el("span", block.txs.length + " 笔"),
+              el("span", hash.shown)
+            );
+            btn.addEventListener("click", () => {
+              col.openHash = col.openHash === block.hash ? "" : block.hash;
+              render();
+            });
+            item.append(btn);
+            if (col.openHash === block.hash) {
+              const detail = el("div", null, "detail");
+              detail.append(
+                el("div", "父哈希 " + block.parentHash),
+                el("div", "状态根 " + block.stateRoot),
+                el("div", "coinbase " + block.coinbase)
+              );
+              for (const tx of block.txs) {
+                const to = tx.to === "" ? "创建" : tx.to;
+                detail.append(el("div", to + "  " + tx.value + "  " + tx.nonce));
+              }
+              item.append(detail);
+            }
+            column.append(item);
+            if (index < blocks.length - 1) column.append(el("div", null, "join"));
+          });
+          if (col.status.height > blockWindow) column.append(el("p", "更早的块未显示", "more"));
+        }
+        root.append(column);
+      }
+      root.scrollLeft = scrollLeft;
+    }
+
+    function blankWatch() {
+      return { inflight: false, error: "", account: null };
+    }
+
+    async function refreshAccount(node, address) {
+      if (!monitoring) return;
+      const epoch = monitorEpoch;
+      const key = watchKey(node, address);
+      const watch = watchState.get(key);
+      if (!watch || watch.inflight) return;
+      watch.inflight = true;
+      try {
+        let res;
+        try {
+          res = await fetch("/api/account?node=" + encodeURIComponent(node) + "&address=" + encodeURIComponent(address), { cache: "no-store" });
+        } catch (err) {
+          if (!stillWatching(epoch)) return;
+          watch.error = "连不上";
+          renderBalances();
+          return;
+        }
+        if (!stillWatching(epoch)) return;
+        if (res.status === 502) {
+          watch.error = "连不上";
+          renderBalances();
+          return;
+        }
+        if (res.status !== 200) {
+          watch.error = String(res.status);
+          renderBalances();
+          return;
+        }
+        const read = await readJSON(res);
+        if (!stillWatching(epoch)) return;
+        if (!read.ok || !validAccount(read.value)) {
+          watch.error = "回应无法解析";
+          renderBalances();
+          return;
+        }
+        watch.error = "";
+        watch.account = read.value;
+        renderBalances();
+      } finally {
+        if (epoch === monitorEpoch) watch.inflight = false;
+      }
+    }
+
+    function removeWatch(node, address) {
+      watches = watches.filter((item) => item.node !== node || item.address !== address);
+      watchState.delete(watchKey(node, address));
+      saveWatches();
+      renderBalances();
+    }
+
+    function renderBalances() {
+      document.getElementById("balance-empty").hidden = watches.length > 0;
+      const root = document.getElementById("balance-list");
+      const sel = window.getSelection();
+      const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      if (range && sel.anchorNode && root.contains(sel.anchorNode) && range.toString() !== "") return;
+      root.replaceChildren();
+      for (const item of watches) {
+        const watch = watchState.get(watchKey(item.node, item.address));
+        const card = el("div", null, "watch");
+        const top = el("div", null, "col-head");
+        top.append(el("span", item.node, "addr"));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "移除";
+        remove.addEventListener("click", () => removeWatch(item.node, item.address));
+        top.append(remove);
+        card.append(top);
+        const shown = abbrev(item.address);
+        const line = el("p", shown.shown, "addr");
+        line.title = shown.original;
+        card.append(line);
+        if (watch.error) card.append(el("p", watch.error, "err"));
+        if (watch.account) {
+          card.append(el("p", "余额 " + formatBalance(watch.account.balance)));
+          card.append(el("p", "nonce " + watch.account.nonce));
+        }
+        root.append(card);
+      }
+    }
+
+    document.getElementById("add-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const input = document.getElementById("node");
+      const err = document.getElementById("form-error");
+      const canonical = canonicalNode(input.value);
+      if (!canonical) {
+        err.textContent = "地址要写成主机:端口";
+        return;
+      }
+      err.textContent = "";
+      input.value = "";
+      if (state.has(canonical)) return;
+      nodes.push(canonical);
+      state.set(canonical, blank());
+      saveNodes();
+      render();
+      refresh(canonical);
+    });
+
+    document.getElementById("node").addEventListener("input", () => {
+      document.getElementById("form-error").textContent = "";
+    });
+
+    document.getElementById("balance-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const nodeInput = document.getElementById("balance-node");
+      const addressInput = document.getElementById("balance-address");
+      const err = document.getElementById("balance-error");
+      const node = canonicalNode(nodeInput.value);
+      const address = canonicalAddress(addressInput.value);
+      if (!node) {
+        err.textContent = "进程要写成主机:端口";
+        return;
+      }
+      if (!address) {
+        err.textContent = "地址要写成 20 字节的十六进制";
+        return;
+      }
+      err.textContent = "";
+      addressInput.value = "";
+      if (watches.some((item) => item.node === node && item.address === address)) return;
+      watches.push({ node, address });
+      watchState.set(watchKey(node, address), blankWatch());
+      saveWatches();
+      renderBalances();
+      refreshAccount(node, address);
+    });
+
+    document.getElementById("balance-node").addEventListener("input", () => {
+      document.getElementById("balance-error").textContent = "";
+    });
+    document.getElementById("balance-address").addEventListener("input", () => {
+      document.getElementById("balance-error").textContent = "";
+    });
+
+    for (const node of nodes) {
+      state.set(node, blank());
+      refresh(node);
+    }
+    for (const item of watches) {
+      watchState.set(watchKey(item.node, item.address), blankWatch());
+      refreshAccount(item.node, item.address);
+    }
+    function paintMonitor() {
+      const button = document.getElementById("monitor");
+      button.textContent = monitoring ? "暂停监控" : "继续监控";
+      button.setAttribute("aria-pressed", monitoring ? "true" : "false");
+    }
+
+    function clearWatched() {
+      for (const col of state.values()) {
+        col.error = "";
+        col.status = null;
+        col.blocks = null;
+        col.openHash = "";
+        col.inflight = false;
+      }
+      for (const watch of watchState.values()) {
+        watch.error = "";
+        watch.account = null;
+        watch.inflight = false;
+      }
+    }
+
+    function resumeWatch() {
+      monitorEpoch++;
+      clearWatched();
+      render();
+      renderBalances();
+      for (const node of nodes) refresh(node);
+      for (const item of watches) refreshAccount(item.node, item.address);
+    }
+
+    document.getElementById("monitor").addEventListener("click", () => {
+      monitoring = !monitoring;
+      paintMonitor();
+      if (monitoring) resumeWatch();
+    });
+
+    render();
+    renderBalances();
+    setInterval(() => {
+      if (!monitoring) return;
+      for (const node of nodes) refresh(node);
+    }, 1000);
+    setInterval(() => {
+      if (!monitoring) return;
+      for (const item of watches) refreshAccount(item.node, item.address);
+    }, balanceInterval);
+  </script>
+</body>
+</html>

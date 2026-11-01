@@ -11,11 +11,11 @@ func TestForkChoicePrefersSmallerHashThenLongerChain(t *testing.T) {
 	rightCoin[19] = 2
 	leftChain := New()
 	rightChain := New()
-	leftBlock, err := leftChain.Mine(leftCoin)
+	leftBlock, err := leftChain.Mine(leftCoin, leftChain.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rightBlock, err := rightChain.Mine(rightCoin)
+	rightBlock, err := rightChain.Mine(rightCoin, rightChain.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestForkChoicePrefersSmallerHashThenLongerChain(t *testing.T) {
 		t.Fatal("a competing block was discarded")
 	}
 
-	extra, err := rightChain.Mine(rightCoin)
+	extra, err := rightChain.Mine(rightCoin, rightChain.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestReorgRestoresAbandonedTransfer(t *testing.T) {
 	if _, err := short.AddTx(tx); err != nil {
 		t.Fatal(err)
 	}
-	spent, err := short.Mine(shortCoin)
+	spent, err := short.Mine(shortCoin, short.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,11 @@ func TestReorgRestoresAbandonedTransfer(t *testing.T) {
 	}
 
 	long := New()
-	first, err := long.Mine(longCoin)
+	first, err := long.Mine(longCoin, long.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := long.Mine(longCoin)
+	second, err := long.Mine(longCoin, long.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestReorgDoesNotRestoreNonceSpentOnWinner(t *testing.T) {
 	if _, err := short.AddTx(txA); err != nil {
 		t.Fatal(err)
 	}
-	spent, err := short.Mine(shortCoin)
+	spent, err := short.Mine(shortCoin, short.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +151,11 @@ func TestReorgDoesNotRestoreNonceSpentOnWinner(t *testing.T) {
 	if _, err := long.AddTx(txB); err != nil {
 		t.Fatal(err)
 	}
-	first, err := long.Mine(longCoin)
+	first, err := long.Mine(longCoin, long.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := long.Mine(longCoin)
+	second, err := long.Mine(longCoin, long.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,8 @@ func TestReorgDoesNotRestoreNonceSpentOnWinner(t *testing.T) {
 func TestAppendDuplicateIsNoop(t *testing.T) {
 	var coin Address
 	coin[19] = 5
-	block, err := New().Mine(coin)
+	fresh := New()
+	block, err := fresh.Mine(coin, fresh.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +204,8 @@ func TestAppendDuplicateIsNoop(t *testing.T) {
 func TestAppendRejectsUnknownParent(t *testing.T) {
 	var coin Address
 	coin[19] = 6
-	block, err := New().Mine(coin)
+	fresh := New()
+	block, err := fresh.Mine(coin, fresh.Head().Time+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,5 +216,73 @@ func TestAppendRejectsUnknownParent(t *testing.T) {
 	}
 	if obs.Head().Height != 0 || obs.Has(block.Hash()) {
 		t.Fatal("rejected block was stored")
+	}
+}
+
+func TestFinalityKeepsForkBelowCheckpointOffTheHead(t *testing.T) {
+	canon := New()
+	var coin Address
+	coin[19] = 1
+	for canon.Head().Height < FinalityDepth+1 {
+		if _, err := canon.Mine(coin, canon.Head().Time+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	head := canon.Head().Hash()
+	side := New()
+	var other Address
+	other[19] = 2
+	for side.Head().Height <= canon.Head().Height+1 {
+		block, err := side.Mine(other, side.Head().Time+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := canon.Append(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if canon.Head().Hash() != head {
+		t.Fatal("fork below the checkpoint became head")
+	}
+	if !canon.Has(side.Head().Hash()) {
+		t.Fatal("side block was not stored")
+	}
+}
+
+func TestLongerForkAboveCheckpointCanBecomeHead(t *testing.T) {
+	canon := New()
+	var coin Address
+	coin[19] = 1
+	var shared Block
+	for canon.Head().Height < FinalityDepth+1 {
+		block, err := canon.Mine(coin, canon.Head().Time+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if block.Height == 1 {
+			shared = block
+		}
+	}
+	rival := New()
+	if err := rival.Append(shared); err != nil {
+		t.Fatal(err)
+	}
+	var other Address
+	other[19] = 9
+	var extra []Block
+	for rival.Head().Height <= canon.Head().Height {
+		block, err := rival.Mine(other, rival.Head().Time+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extra = append(extra, block)
+	}
+	for _, block := range extra {
+		if err := canon.Append(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if canon.Head().Hash() != rival.Head().Hash() {
+		t.Fatal("longer fork above the checkpoint did not become head")
 	}
 }

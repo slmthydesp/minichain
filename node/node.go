@@ -1,3 +1,5 @@
+// Package node 把链暴露成 HTTP，并向其他进程同步区块。
+// 每个进程都自己出块。配置了 peer 时，从对方链头沿父哈希往回取块，再从旧到新接上。
 package node
 
 import (
@@ -12,12 +14,14 @@ import (
 	"github.com/slmthydesp/minichain/chain"
 )
 
+// Node 持有一条链，以及要同步和转发交易的 peer 地址。
 type Node struct {
 	chain  *chain.Chain
 	peers  []string
 	client *http.Client
 }
 
+// New 去掉 peer 地址两端的空白和末尾斜杠。空字符串会被丢掉。
 func New(c *chain.Chain, peers []string) *Node {
 	cleaned := make([]string, 0, len(peers))
 	for _, peer := range peers {
@@ -33,10 +37,12 @@ func New(c *chain.Chain, peers []string) *Node {
 	}
 }
 
+// NewMiner 创建一个不跟随别人的节点。出块由调用方自己循环调用 Chain.Mine。
 func NewMiner(c *chain.Chain) *Node {
 	return New(c, nil)
 }
 
+// NewFollower 创建一个跟随单个 peer 的节点。它仍然可以自己出块。
 func NewFollower(c *chain.Chain, peer string) *Node {
 	return New(c, []string{peer})
 }
@@ -45,6 +51,7 @@ func (n *Node) Chain() *chain.Chain {
 	return n.chain
 }
 
+// FollowOnce 向每个 peer 同步一轮。某个 peer 失败时继续问下一个，最后返回第一个错误。
 func (n *Node) FollowOnce(ctx context.Context) error {
 	if len(n.peers) == 0 {
 		return fmt.Errorf("not a follower")
@@ -58,6 +65,7 @@ func (n *Node) FollowOnce(ctx context.Context) error {
 	return first
 }
 
+// followPeer 读取对方链头，沿父哈希收集本地没有的块，再从最老的一块开始 Append。
 func (n *Node) followPeer(ctx context.Context, peer string) error {
 	body, status, err := n.get(ctx, peer+"/status")
 	if err != nil {

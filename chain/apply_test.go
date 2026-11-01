@@ -47,6 +47,28 @@ func TestApplyTransferUpdatesNonceAndBalances(t *testing.T) {
 	}
 }
 
+func TestApplyZeroAddressIsTransferNotCreate(t *testing.T) {
+	st, from := funded(t, 100000, 0)
+	var coin Address
+	coin[19] = 3
+	st.SetCoinbase(coin)
+	tx, err := Sign(demoKey(t), Address{}, 10, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(st, tx); err != nil {
+		t.Fatal(err)
+	}
+	recip, ok := st.Get(Address{})
+	if !ok || recip.Balance != 10 || recip.Nonce != 0 || len(st.Code(Address{})) != 0 {
+		t.Fatalf("zero address = %+v ok=%v", recip, ok)
+	}
+	got, _ := st.Get(from)
+	if got.Balance != 100000-10-21000 || got.Nonce != 1 {
+		t.Fatalf("sender = %+v", got)
+	}
+}
+
 func TestApplySelfTransferKeepsBalance(t *testing.T) {
 	st, from := funded(t, 100000, 0)
 	var coin Address
@@ -170,12 +192,12 @@ func TestApplyPaysCoinbase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gas, err := Apply(st, tx)
+	receipt, err := Apply(st, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gas != IntrinsicGas {
-		t.Fatalf("gas = %d", gas)
+	if receipt.GasUsed != IntrinsicGas || receipt.Status != 1 {
+		t.Fatalf("receipt = %+v", receipt)
 	}
 	got, ok := st.Get(from)
 	if !ok || got.Balance != 1000000-10-42000 || got.Nonce != 1 {
@@ -196,12 +218,12 @@ func TestApplyPaysCoinbase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gas, err = Apply(wideState, wide)
+	receipt, err = Apply(wideState, wide)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gas != 21000 {
-		t.Fatalf("wide gas = %d", gas)
+	if receipt.GasUsed != 21000 {
+		t.Fatalf("wide gas = %d", receipt.GasUsed)
 	}
 	wideSender, _ := wideState.Get(wideFrom)
 	if wideSender.Balance != 1000000-10-42000 {
