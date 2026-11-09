@@ -6,63 +6,137 @@ import (
 	"math/big"
 )
 
-// 虚拟机只实现说明执行所需要的操作码。字长 32 字节，和以太坊一样。
-// 余额和 gas 仍是 uint64，1 个币是 10^18 个最小单位。调用、回退和停机的结果由执行层决定要不要保留状态。
-// 调用能读到调用者、本地址、这笔金额、区块高度和时间。EQ、LT、ISZERO 的结果用来决定 JUMPI。
+// 操作码编号、弹出顺序和结果对齐 Osaka 的传统执行，不含 EOF。
+// 对照表：https://www.evm.codes/?fork=osaka
+// 和以太坊仍有这些差别：余额和金额是 uint64；gas 是固定价，不随冷热和硬分叉变化；
+// 内存按字节线性扩张，MSIZE 是当前字节数，不按 32 字节向上取整；
+// 这条链没有 blob、base fee 和 prevrandao，对应操作码读出来是 0；
+// CALL 附带金额时不另给 2300 的 stipend。
 const (
-	// 操作码取值和以太坊相同。停机、加减和比较。
-	opSTOP   = 0x00
-	opADD    = 0x01
-	opSUB    = 0x03
+	// 0x00 算术。停机、加减乘除、取模、幂和符号扩展。
+	opSTOP       = 0x00
+	opADD        = 0x01
+	opMUL        = 0x02
+	opSUB        = 0x03
+	opDIV        = 0x04
+	opSDIV       = 0x05
+	opMOD        = 0x06
+	opSMOD       = 0x07
+	opADDMOD     = 0x08
+	opMULMOD     = 0x09
+	opEXP        = 0x0a
+	opSIGNEXTEND = 0x0b
+	// 0x10 比较和位运算。Osaka 在这里多了 CLZ。
 	opLT     = 0x10
+	opGT     = 0x11
+	opSLT    = 0x12
+	opSGT    = 0x13
 	opEQ     = 0x14
 	opISZERO = 0x15
-	// 当前合约、调用者和本次调用附带的金额，以及区块时间和高度。
-	opADDRESS   = 0x30
-	opCALLER    = 0x33
-	opCALLVALUE = 0x34
-	opTIMESTAMP = 0x42
-	opNUMBER    = 0x43
-	// 调用数据、把代码拷进内存，以及内存、存储的读写。
-	opCALLDATALOAD = 0x35
-	opCALLDATASIZE = 0x36
-	opCODECOPY     = 0x39
-	opMLOAD        = 0x51
-	opMSTORE       = 0x52
-	opSLOAD        = 0x54
-	opSSTORE       = 0x55
-	// 跳转。JUMPDEST 是合法落点。PUSH1 到 PUSH32 从 0x60 连续排开。
+	opAND    = 0x16
+	opOR     = 0x17
+	opXOR    = 0x18
+	opNOT    = 0x19
+	opBYTE   = 0x1a
+	opSHL    = 0x1b
+	opSHR    = 0x1c
+	opSAR    = 0x1d
+	opCLZ    = 0x1e
+	// 0x20 哈希。
+	opKECCAK256 = 0x20
+	// 0x30 调用上下文和代码。
+	opADDRESS        = 0x30
+	opBALANCE        = 0x31
+	opORIGIN         = 0x32
+	opCALLER         = 0x33
+	opCALLVALUE      = 0x34
+	opCALLDATALOAD   = 0x35
+	opCALLDATASIZE   = 0x36
+	opCALLDATACOPY   = 0x37
+	opCODESIZE       = 0x38
+	opCODECOPY       = 0x39
+	opGASPRICE       = 0x3a
+	opEXTCODESIZE    = 0x3b
+	opEXTCODECOPY    = 0x3c
+	opRETURNDATASIZE = 0x3d
+	opRETURNDATACOPY = 0x3e
+	opEXTCODEHASH    = 0x3f
+	// 0x40 区块。0x44 在合并后是 PREVRANDAO。这条链没有随机数、base fee 和 blob，读出来是 0。
+	opBLOCKHASH   = 0x40
+	opCOINBASE    = 0x41
+	opTIMESTAMP   = 0x42
+	opNUMBER      = 0x43
+	opPREVRANDAO  = 0x44
+	opGASLIMIT    = 0x45
+	opCHAINID     = 0x46
+	opSELFBALANCE = 0x47
+	opBASEFEE     = 0x48
+	opBLOBHASH    = 0x49
+	opBLOBBASEFEE = 0x4a
+	// 0x50 栈、内存、存储和跳转。PUSH0、TLOAD、TSTORE、MCOPY 是后来的硬分叉加上的。
+	opPOP      = 0x50
+	opMLOAD    = 0x51
+	opMSTORE   = 0x52
+	opMSTORE8  = 0x53
+	opSLOAD    = 0x54
+	opSSTORE   = 0x55
 	opJUMP     = 0x56
 	opJUMPI    = 0x57
+	opPC       = 0x58
+	opMSIZE    = 0x59
+	opGAS      = 0x5a
 	opJUMPDEST = 0x5b
+	opTLOAD    = 0x5c
+	opTSTORE   = 0x5d
+	opMCOPY    = 0x5e
+	opPUSH0    = 0x5f
 	opPUSH1    = 0x60
-	// LOG0 没有 topic，LOG1 有一个。CALL 调用别的合约，RETURN 正常返回，REVERT 回退这一帧。
-	opLOG0   = 0xa0
-	opLOG1   = 0xa1
-	opCALL   = 0xf1
-	opRETURN = 0xf3
-	opREVERT = 0xfd
+	opPUSH32   = 0x7f
+	opDUP1     = 0x80
+	opDUP16    = 0x8f
+	opSWAP1    = 0x90
+	opSWAP16   = 0x9f
+	// 0xa0 日志。LOG0 没有 topic，LOG4 有四个。
+	opLOG0 = 0xa0
+	opLOG4 = 0xa4
+	// 0xf0 调用和创建。EOF 的操作码不在 Osaka 的传统执行里，遇到就停机。
+	opCREATE       = 0xf0
+	opCALL         = 0xf1
+	opCALLCODE     = 0xf2
+	opRETURN       = 0xf3
+	opDELEGATECALL = 0xf4
+	opCREATE2      = 0xf5
+	opSTATICCALL   = 0xfa
+	opREVERT       = 0xfd
+	opINVALID      = 0xfe
+	opSELFDESTRUCT = 0xff
 
-	// 执行这些操作要收的 gas。
-	gasBase      uint64 = 3    // 加减、比较、压栈和读调用信息
-	gasJump      uint64 = 8    // JUMP
-	gasJumpi     uint64 = 10   // JUMPI
-	gasJumpdest  uint64 = 1    // 落在 JUMPDEST
-	gasSLoad     uint64 = 100  // 读存储
-	gasSStore    uint64 = 5000 // 写存储
-	gasCall      uint64 = 100  // CALL 本身
-	gasCallValue uint64 = 9000 // CALL 还附带了金额
-	gasLog       uint64 = 375  // 一条日志
-	gasLogTopic  uint64 = 375  // 日志里每个 topic
-	gasLogData   uint64 = 8    // 日志数据的每个字节
-	gasMemory    uint64 = 3    // 内存每多扩一个字节
+	// 执行这些操作要收的 gas。算术、比较、压栈和环境读取都是 gasBase，不跟 Osaka 的 gas 表。
+	gasBase         uint64 = 3    // 加减、比较、压栈和读调用信息
+	gasJump         uint64 = 8    // JUMP
+	gasJumpi        uint64 = 10   // JUMPI
+	gasJumpdest     uint64 = 1    // 落在 JUMPDEST
+	gasSLoad        uint64 = 100  // 读存储
+	gasSStore       uint64 = 5000 // 写存储
+	gasTransient    uint64 = 100  // TLOAD 和 TSTORE
+	gasKeccak       uint64 = 30   // KECCAK256 的底价
+	gasKeccakWord   uint64 = 6    // KECCAK256 每个 32 字节字
+	gasCall         uint64 = 100  // CALL 本身
+	gasCallValue    uint64 = 9000 // CALL 还附带了金额
+	gasCreate       uint64 = 32000
+	gasSelfdestruct uint64 = 5000
+	gasLog          uint64 = 375 // 一条日志
+	gasLogTopic     uint64 = 375 // 日志里每个 topic
+	gasLogData      uint64 = 8   // 日志数据的每个字节
+	gasMemory       uint64 = 3   // 内存每多扩一个字节
 
 	// 执行时不能超过的上限。
-	maxCodeSize = 24576  // 部署后的合约代码最多这么多字节
-	maxStack    = 1024   // 栈最多这么多项
-	maxMemory   = 65536  // 一次调用的内存最多这么多字节
-	maxDepth    = 1024   // CALL 最多嵌套这么层
-	maxSteps    = 100000 // 一条指令算一步，防止跳转死循环
+	maxCodeSize = 24576           // 部署后的合约代码最多这么多字节
+	maxInitCode = maxCodeSize * 2 // 创建时的初始代码最多这么多字节
+	maxStack    = 1024            // 栈最多这么多项
+	maxMemory   = 65536           // 一次调用的内存最多这么多字节
+	maxDepth    = 1024            // CALL 和 CREATE 最多嵌套这么层
+	maxSteps    = 100000          // 一条指令算一步，防止跳转死循环
 )
 
 // execKind 是一帧执行的结果种类。只有成功、回退、停机三种。
@@ -96,27 +170,28 @@ func CreateAddress(sender Address, nonce uint64) Address {
 
 // machine 是一次调用的栈、内存和程序计数器。steps 在嵌套调用之间共用，防止跳转死循环。
 type machine struct {
-	state    *State       // 这一帧正在改的状态。内层 CALL 失败时，调用方换回调用前的快照。
-	contract Address      // 正在执行的合约。ADDRESS 读它。
-	caller   Address      // 谁发起了这一帧。CALLER 读它。
-	value    uint64       // 这次调用附带的金额。CALLVALUE 读它。
-	input    []byte       // 调用数据。创建合约时是 nil，初始代码放在 code 里。
-	code     []byte       // 本帧要执行的字节码。
-	dests    map[int]bool // 合法 JUMPDEST 的位置。PUSH 立即数里的同名字节不算。
-	pc       int          // 下一条要读的字节。JUMP 会把它改掉。
-	gas      uint64       // 这一帧还剩的 gas。
-	stack    []Hash       // 栈顶是最后一项，每项 32 字节。
-	mem      []byte       // 本帧内存。用到更远处时按字节扩，并收费。
-	logs     []Log        // 本帧成功时记下的日志。回退或停机时 runCode 不交出去。
-	ret      []byte       // 只有 RETURN 会写入。STOP 不碰它，所以交出去是空。REVERT 时 runCode 丢掉它。
-	depth    int          // 调用深度。交易入口是 1，每层 CALL 加 1。
-	steps    *int         // 剩余步数。嵌套 CALL 共用这一个指针。
+	state      *State       // 这一帧正在改的状态。内层 CALL 失败时，调用方换回调用前的快照。
+	contract   Address      // 正在执行的合约。ADDRESS 读它。
+	caller     Address      // 谁发起了这一帧。CALLER 读它。
+	value      uint64       // 这次调用附带的金额。CALLVALUE 读它。
+	input      []byte       // 调用数据。创建合约时是 nil，初始代码放在 code 里。
+	code       []byte       // 本帧要执行的字节码。
+	dests      map[int]bool // 合法 JUMPDEST 的位置。PUSH 立即数里的同名字节不算。
+	pc         int          // 下一条要读的字节。JUMP 会把它改掉。
+	gas        uint64       // 这一帧还剩的 gas。
+	stack      []Hash       // 栈顶是最后一项，每项 32 字节。
+	mem        []byte       // 本帧内存。用到更远处时按字节扩，并收费。
+	logs       []Log        // 本帧成功时记下的日志。回退或停机时 runCode 不交出去。
+	ret        []byte       // RETURN 和 REVERT 写入。STOP 不碰它。REVERT 的这段交给调用方做返回数据，不作为成功返回值。
+	returnData []byte       // 最近一次子调用的返回数据。成功和回退都留下，停机清掉。RETURNDATACOPY 读它。
+	depth      int          // 调用深度。交易入口是 1，每层 CALL 加 1。
+	steps      *int         // 剩余步数。嵌套 CALL 共用这一个指针。
 }
 
 // runCode 从程序开头跑到停机、回退或代码结束。内层失败由调用方决定要不要恢复状态。
 // value 是这笔调用附带的金额。区块高度和时间在状态的这一拍里，内层调用看到的是同一块。
 // 四个返回值依次是返回数据、日志、剩余 gas 和结果种类。
-// 返回数据是 RETURN 写出来的字节；代码自己跑完、REVERT 或停机时是 nil。
+// 返回数据在 RETURN 时是成功的返回值，在 REVERT 时是回退数据。代码自己跑完或停机时是 nil。
 // 日志是这一帧成功时记下的；REVERT 或停机时丢掉，返回 nil。
 // 剩余 gas 是停下来时还剩的；停机（execHalt）时是 0，这一帧剩下的 gas 全部扣掉。
 // 结果种类是 execOK、execRevert 或 execHalt。
@@ -142,10 +217,10 @@ func runCode(st *State, contract, caller Address, value uint64, input, code []by
 		if errors.Is(err, errStop) {
 			return m.ret, m.logs, m.gas, execOK
 		}
-		// REVERT 也会先把内存写入 m.ret，这里故意丢掉，调用方拿不到这段。
-		// 剩余 gas 退回。状态恢复由调用方做。
+		// REVERT 把内存写入 m.ret。这段是回退数据，不是成功的返回值。
+		// 调用方把它留作 RETURNDATACOPY 的来源。日志不交出去。剩余 gas 退回。状态恢复由调用方做。
 		if errors.Is(err, errRevert) {
-			return nil, nil, m.gas, execRevert
+			return m.ret, nil, m.gas, execRevert
 		}
 		// 非法操作码、栈错误或 gas 不够：这一帧剩下的 gas 全部作废。
 		if err != nil {
@@ -180,68 +255,186 @@ func jumpDests(code []byte) map[int]bool {
 // 多数指令先经 charge 扣 gas，扣完再改栈、内存或存储。
 // 看 exec 函数的时候，时刻记住 m.pc 在调用 exec 前已经自动 +1 了
 func (m *machine) exec(op byte) error {
-	switch {
-	case op == opSTOP:
+	switch op {
+	case opSTOP:
 		// 成功停机，不带返回数据。runCode 把空的 m.ret 交出去。
 		return errStop
-	case op == opADD:
+	case opADD:
 		return m.binop(addWord)
-	case op == opSUB:
+	case opMUL:
+		return m.binop(mulWord)
+	case opSUB:
 		return m.binop(subWord)
-	case op == opLT:
+	case opDIV:
+		return m.binop(divWord)
+	case opSDIV:
+		return m.binop(sdivWord)
+	case opMOD:
+		return m.binop(modWord)
+	case opSMOD:
+		return m.binop(smodWord)
+	case opADDMOD:
+		return m.ternop(addModWord)
+	case opMULMOD:
+		return m.ternop(mulModWord)
+	case opEXP:
+		return m.binop(expWord)
+	case opSIGNEXTEND:
+		return m.binop(signExtendWord)
+	case opLT:
 		return m.binop(ltWord)
-	case op == opEQ:
+	case opGT:
+		return m.binop(gtWord)
+	case opSLT:
+		return m.binop(sltWord)
+	case opSGT:
+		return m.binop(sgtWord)
+	case opEQ:
 		return m.binop(eqWord)
-	case op == opISZERO:
+	case opISZERO:
 		return m.opIsZero()
-	case op == opADDRESS:
+	case opAND:
+		return m.binop(andWord)
+	case opOR:
+		return m.binop(orWord)
+	case opXOR:
+		return m.binop(xorWord)
+	case opNOT:
+		return m.unop(notWord)
+	case opBYTE:
+		return m.binop(byteWord)
+	case opSHL:
+		return m.binop(shlWord)
+	case opSHR:
+		return m.binop(shrWord)
+	case opSAR:
+		return m.binop(sarWord)
+	case opCLZ:
+		return m.unop(clzWord)
+	case opKECCAK256:
+		return m.opKeccak()
+	case opADDRESS:
 		return m.charge(gasBase, func() error { return m.push(hashFromAddress(m.contract)) })
-	case op == opCALLER:
+	case opBALANCE:
+		return m.opBalance()
+	case opORIGIN:
+		return m.charge(gasBase, func() error { return m.push(hashFromAddress(m.state.origin)) })
+	case opCALLER:
 		return m.charge(gasBase, func() error { return m.push(hashFromAddress(m.caller)) })
-	case op == opCALLVALUE:
+	case opCALLVALUE:
 		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.value)) })
-	case op == opTIMESTAMP:
-		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.state.blockTime)) })
-	case op == opNUMBER:
-		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.state.blockNumber)) })
-	case op == opCALLDATASIZE:
+	case opCALLDATALOAD:
+		return m.charge(gasBase, m.opCallDataLoad)
+	case opCALLDATASIZE:
 		return m.charge(gasBase, func() error {
 			return m.push(hashFromUint64(uint64(len(m.input))))
 		})
-	case op == opCALLDATALOAD:
-		return m.charge(gasBase, m.opCallDataLoad)
-	case op == opCODECOPY:
+	case opCALLDATACOPY:
+		return m.opCallDataCopy()
+	case opCODESIZE:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(uint64(len(m.code)))) })
+	case opCODECOPY:
 		return m.charge(gasBase, m.opCodeCopy)
-	case op == opMLOAD:
+	case opGASPRICE:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.state.gasPrice)) })
+	case opEXTCODESIZE:
+		return m.opExtCodeSize()
+	case opEXTCODECOPY:
+		return m.opExtCodeCopy()
+	case opRETURNDATASIZE:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(uint64(len(m.returnData)))) })
+	case opRETURNDATACOPY:
+		return m.opReturnDataCopy()
+	case opEXTCODEHASH:
+		return m.opExtCodeHash()
+	case opBLOCKHASH:
+		return m.opBlockHash()
+	case opCOINBASE:
+		return m.charge(gasBase, func() error { return m.push(hashFromAddress(m.state.coinbase)) })
+	case opTIMESTAMP:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.state.blockTime)) })
+	case opNUMBER:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.state.blockNumber)) })
+	case opPREVRANDAO, opBASEFEE, opBLOBBASEFEE:
+		// 这条链没有随机数、base fee 和 blob。操作码在，读出来是 0。
+		return m.charge(gasBase, func() error { return m.push(Hash{}) })
+	case opGASLIMIT:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(BlockGasLimit)) })
+	case opCHAINID:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(ChainID)) })
+	case opSELFBALANCE:
+		return m.opSelfBalance()
+	case opBLOBHASH:
+		return m.opBlobHash()
+	case opPOP:
+		return m.opPop()
+	case opMLOAD:
 		return m.charge(gasBase, m.opMload)
-	case op == opMSTORE:
+	case opMSTORE:
 		return m.charge(gasBase, m.opMstore)
-	case op == opSLOAD:
+	case opMSTORE8:
+		return m.opMstore8()
+	case opSLOAD:
 		return m.charge(gasSLoad, m.opSload)
-	case op == opSSTORE:
+	case opSSTORE:
 		return m.charge(gasSStore, m.opSstore)
-	case op == opJUMP:
+	case opJUMP:
 		return m.charge(gasJump, func() error { return m.jump(true) })
-	case op == opJUMPI:
+	case opJUMPI:
 		return m.charge(gasJumpi, m.opJumpi)
-	case op == opJUMPDEST:
+	case opPC:
+		// exec 调用前 pc 已经指向下一条，所以这条指令自己的位置是 pc-1。
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(uint64(m.pc - 1))) })
+	case opMSIZE:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(uint64(len(m.mem)))) })
+	case opGAS:
+		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.gas)) })
+	case opJUMPDEST:
 		return m.charge(gasJumpdest, func() error { return nil })
-	case op >= opPUSH1 && op <= 0x7f:
-		return m.charge(gasBase, func() error { return m.opPush(int(op - opPUSH1 + 1)) })
-	case op == opLOG0:
-		return m.opLog(0)
-	case op == opLOG1:
-		return m.opLog(1)
-	case op == opCALL:
+	case opTLOAD:
+		return m.opTload()
+	case opTSTORE:
+		return m.opTstore()
+	case opMCOPY:
+		return m.opMcopy()
+	case opPUSH0:
+		return m.charge(gasBase, func() error { return m.push(Hash{}) })
+	case opCREATE:
+		return m.opCreate(false)
+	case opCALL:
 		return m.opCall()
-	case op == opRETURN:
+	case opCALLCODE:
+		return m.opCallCode()
+	case opRETURN:
 		// 先把内存写入 m.ret，再返回 errStop。runCode 把 m.ret 作为返回数据交出去。
 		return m.opReturn(errStop)
-	case op == opREVERT:
-		// 同样写入 m.ret，但返回 errRevert。runCode 丢掉这段，不交给调用方。
+	case opDELEGATECALL:
+		return m.opDelegateCall()
+	case opCREATE2:
+		return m.opCreate(true)
+	case opSTATICCALL:
+		return m.opStaticCall()
+	case opREVERT:
+		// 同样写入 m.ret，但返回 errRevert。runCode 把这段交给调用方当作回退数据。
 		return m.opReturn(errRevert)
-	default:
+	case opINVALID:
 		return errHalt
+	case opSELFDESTRUCT:
+		return m.opSelfdestruct()
+	default:
+		switch {
+		case op >= opPUSH1 && op <= opPUSH32:
+			return m.charge(gasBase, func() error { return m.opPush(int(op - opPUSH1 + 1)) })
+		case op >= opDUP1 && op <= opDUP16:
+			return m.opDup(int(op - opDUP1 + 1))
+		case op >= opSWAP1 && op <= opSWAP16:
+			return m.opSwap(int(op - opSWAP1 + 1))
+		case op >= opLOG0 && op <= opLOG4:
+			return m.opLog(int(op - opLOG0))
+		default:
+			// EOF 和还没进 Osaka 的操作码走这里，整帧停机。
+			return errHalt
+		}
 	}
 }
 
@@ -268,6 +461,16 @@ func (m *machine) opIsZero() error {
 	})
 }
 
+// unop 弹出栈顶，把结果压回去。
+func (m *machine) unop(fn func(a Hash) Hash) error {
+	return m.charge(gasBase, func() error {
+		if len(m.stack) < 1 {
+			return errHalt
+		}
+		return m.push(fn(m.pop()))
+	})
+}
+
 // binop 先弹出的 a 是栈顶，后弹出的 b 是下一字。ADD 算 a+b，SUB 算 a-b。
 func (m *machine) binop(fn func(a, b Hash) Hash) error {
 	return m.charge(gasBase, func() error {
@@ -277,6 +480,19 @@ func (m *machine) binop(fn func(a, b Hash) Hash) error {
 		a := m.pop()
 		b := m.pop()
 		return m.push(fn(a, b))
+	})
+}
+
+// ternop 先弹出的 a 是栈顶，然后是 b，最后是 c。ADDMOD 算 (a+b)%c。
+func (m *machine) ternop(fn func(a, b, c Hash) Hash) error {
+	return m.charge(gasBase, func() error {
+		if len(m.stack) < 3 {
+			return errHalt
+		}
+		a := m.pop()
+		b := m.pop()
+		c := m.pop()
+		return m.push(fn(a, b, c))
 	})
 }
 
@@ -366,12 +582,22 @@ func (m *machine) opMstore() error {
 
 // opSload 读本合约的存储。键是栈顶那个 32 字节字，没写过的槽读出来是 0。
 func (m *machine) opSload() error {
+	if len(m.stack) < 1 {
+		return errHalt
+	}
 	key := m.pop()
 	return m.push(m.state.GetStorage(m.contract, key))
 }
 
 // opSstore 写本合约的存储。先弹出键，再弹出值。写成全 0 的槽由状态层删掉。
+// 只读帧里写存储会停机。gas 已经在外面扣过。
 func (m *machine) opSstore() error {
+	if m.state.readOnly {
+		return errHalt
+	}
+	if len(m.stack) < 2 {
+		return errHalt
+	}
 	key := m.pop()
 	val := m.pop()
 	m.state.SetStorage(m.contract, key, val)
@@ -406,7 +632,11 @@ func (m *machine) jump(must bool) error {
 
 // opLog 先弹出数据在内存中的偏移和长度，再弹出 topics 个主题。
 // 费用是一笔日志的底价，加上每个 topic，再加上数据的每个字节。乘积放不下 uint64 就停机。
+// 只读帧里打日志会停机。
 func (m *machine) opLog(topics int) error {
+	if m.state.readOnly {
+		return errHalt
+	}
 	off, ok1 := m.popUint64()
 	size, ok2 := m.popUint64()
 	if !ok1 || !ok2 || len(m.stack) < topics {
@@ -450,91 +680,17 @@ func (m *machine) opReturn(done error) error {
 	return done
 }
 
-// opCall 弹出 gas、地址、金额和输入输出区间。转出的 gas 不超过本帧剩余的 63/64。
-// 金额必须放进 uint64。被调用方没有代码时退回转出的 gas，并压入 1。
-// 内层回退只恢复这次调用前的状态，外层可以继续成功。
-func (m *machine) opCall() error {
-	// 栈上依次是：转出的 gas、对方地址、金额、输入偏移、输入长度、输出偏移、输出长度。
-	if len(m.stack) < 7 {
-		return errHalt
-	}
-	// 嵌套到 maxDepth 时这次调用失败：七个参数弹出，压入 0，本帧继续执行。
-	if m.depth >= maxDepth {
-		for i := 0; i < 7; i++ {
-			m.pop()
-		}
-		return m.push(Hash{})
-	}
-	gasReq, okG := m.popUint64()
-	to := addressFromHash(m.pop())
-	value, okV := m.popUint64()
-	inOff, ok1 := m.popUint64()
-	inSize, ok2 := m.popUint64()
-	retOff, ok3 := m.popUint64()
-	retSize, ok4 := m.popUint64()
-	if !okG || !okV || !ok1 || !ok2 || !ok3 || !ok4 {
-		return errHalt
-	}
-	// 附带金额的 CALL 比纯调用多收一笔。
-	cost := gasCall
-	if value > 0 {
-		cost += gasCallValue
-	}
-	if m.gas < cost {
-		return errHalt
-	}
-	m.gas -= cost
-	// 先扩输入区间，后面才能从内存切出转给内层的调用数据。
-	if err := m.grow(inOff, inSize); err != nil {
-		return err
-	}
-	// 输出区间也要现在扩：费用在调用前收齐。内层还没跑，返回数据稍后才写进来。
-	if err := m.grow(retOff, retSize); err != nil {
-		return err
-	}
-	input := append([]byte(nil), m.mem[inOff:inOff+inSize]...)
-	// 转给内层的 gas 不超过扣完调用费之后剩余的 63/64。调用方要得更少，就按它要的给。
-	available := m.gas - m.gas/64
-	forward := available
-	if gasReq < forward {
-		forward = gasReq
-	}
-	m.gas -= forward
-	// 转账和内层改状态之前留一份快照。内层失败时只回到这里，外层已经做的修改还在。
-	snap := m.state.Copy()
-	if err := m.state.transfer(m.contract, to, value); err != nil {
-		// 转账没做成。转出的 gas 退回。余额溢出则整帧停机，余额不够则压入 0，本帧继续。
-		m.gas += forward
-		if errors.Is(err, ErrBalanceOverflow) {
-			return err
-		}
-		return m.push(Hash{})
-	}
-	code := m.state.GetCode(to)
-	// 对方没有代码：钱已经转过去，不用跑字节码，转出的 gas 全部退回，压入 1。
-	if len(code) == 0 {
-		m.gas += forward
-		return m.push(hashFromUint64(1))
-	}
-	// ret 就是内层 RETURN 写进 m.ret、再由 runCode 交出来的那段。STOP 或跑完则是 nil。
-	ret, logs, left, kind := runCode(m.state, to, m.contract, value, input, code, forward, m.depth+1, m.steps)
-	// 内层没用完的 gas 加回本帧。回退会退回剩余 gas；停机时 left 是 0，转出的那一份不退。
-	m.gas += left
-	// 内层回退或停机都只恢复这次调用前的快照。外层栈上得到 0，外层自己仍可以成功。
-	if kind != execOK {
-		m.state.restore(snap)
-		return m.push(Hash{})
-	}
-	m.logs = append(m.logs, logs...)
-	n := retSize
-	if uint64(len(ret)) < n {
-		n = uint64(len(ret))
-	}
-	// 输出区先清掉，再拷进返回数据。数据比留出的长度短，后面保持 0；更长的部分丢掉。
-	copy(m.mem[retOff:retOff+retSize], make([]byte, retSize))
-	copy(m.mem[retOff:], ret[:n])
-	return m.push(hashFromUint64(1))
-}
+// opCall 弹出 gas、地址、金额和输入输出区间。语义在 execCall。
+func (m *machine) opCall() error { return m.execCall(modeCall) }
+
+// opCallCode 用对方的代码，但存储、ADDRESS 和 CALLER 仍是当前合约，并按栈上的金额转账。
+func (m *machine) opCallCode() error { return m.execCall(modeCallCode) }
+
+// opDelegateCall 用对方的代码改自己的存储。CALLER 和 CALLVALUE 保持当前这一帧，不转账。
+func (m *machine) opDelegateCall() error { return m.execCall(modeDelegate) }
+
+// opStaticCall 只读调用。内层写存储、打日志、创建或带金额调用都会停机，外层仍可继续。
+func (m *machine) opStaticCall() error { return m.execCall(modeStatic) }
 
 // grow 把内存扩到能盖住这段区间。每多一个字节收 gasMemory，上限是 maxMemory。
 func (m *machine) grow(off, size uint64) error {

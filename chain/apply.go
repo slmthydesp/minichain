@@ -135,6 +135,8 @@ func Apply(s *State, tx Tx) (Receipt, error) {
 	if err != nil {
 		return Receipt{}, err
 	}
+	// 先记 ORIGIN 和 GASPRICE，并清掉上一笔的瞬时存储。快照打在这之后，回退时这些也回到空。
+	s.beginTx(sender, tx.GasPrice)
 	// 先留快照。转账或跑代码改坏了，可以整份换回来。
 	snap := s.Copy()
 	result, err := executeTx(s, sender, tx)
@@ -143,6 +145,11 @@ func Apply(s *State, tx Tx) (Receipt, error) {
 		s.restore(snap)
 		return Receipt{}, err
 	}
+	// 成功时才删掉本笔新建后又 SELFDESTRUCT 的合约。回退和停机会在 commitExec 里换回快照。
+	if result.Kind == execOK {
+		s.finishSelfDestruct()
+	}
+	s.endTx()
 	status, gasLeft, logs := commitExec(s, snap, sender, result)
 	receipt, err := receiptFor(s, sender, tx, status, gasLeft, logs)
 	if err != nil {
@@ -237,6 +244,8 @@ func executeCreate(s *State, sender Address, tx Tx, gasLeft uint64) (execResult,
 	}
 	created.Nonce = 1
 	s.SetAccount(created)
+	// 初始代码里的 SELFDESTRUCT 只有这个标记还在，交易成功结束时才会把账户删掉。
+	s.markCreated(addr)
 	// tx.Data 是初始代码，不是调用数据，所以 input 传 nil。value 是创建时附带的金额。
 	steps := maxSteps
 	ret, logs, left, kind := runCode(s, addr, sender, tx.Value, nil, tx.Data, gasLeft, 1, &steps)

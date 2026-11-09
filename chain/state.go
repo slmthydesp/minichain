@@ -5,6 +5,7 @@ import "bytes"
 // State 是某一区块执行完后的账户表。coinbase、区块高度和时间只在执行这一拍使用，不写进状态根。
 // 代码和存储单独存放，账户结构本身仍然只有地址、余额和 nonce。
 // 状态根只从 accounts 里的账户算起：每个账户再带上自己的存储根和代码哈希。
+// origin、gasPrice、瞬时存储、本笔交易新建和自毁的地址、最近区块哈希，也只在执行时用，不进状态根。
 type State struct {
 	accounts map[Address]Account // 会进状态树的账户。余额变成 0 不会自动删掉。
 	code     map[Address][]byte  // 合约代码。没有代码的地址不在这张表里。
@@ -16,6 +17,14 @@ type State struct {
 	coinbase    Address // 这一拍收取 gas 费用的账户。换块时由调用方重新指定。
 	blockNumber uint64  // 这一拍的区块高度。合约用 NUMBER 读取。
 	blockTime   uint64  // 这一拍的区块时间。合约用 TIMESTAMP 读取。
+
+	origin      Address                   // 这笔交易的发送方。ORIGIN 读它。调用帧里的 CALLER 不是它。
+	gasPrice    uint64                    // 这笔交易的单价。GASPRICE 读它。
+	readOnly    bool                      // 为真时这一帧不能写状态。STATICCALL 会把它设上，内层调用也跟着不能写。
+	transient   map[Address]map[Hash]Hash // 瞬时存储。TLOAD 和 TSTORE 用。一笔交易结束就丢掉，不进状态根。
+	created     map[Address]bool          // 这笔交易里新建的合约。SELFDESTRUCT 只删除这些地址。
+	destructed  map[Address]bool          // 这笔交易里执行过 SELFDESTRUCT 的地址。交易成功结束时才真正删。
+	blockHashes map[uint64]Hash           // 最近区块的哈希。BLOCKHASH 只回答最近 256 块。
 }
 
 func NewState() *State {
@@ -32,6 +41,18 @@ func (s *State) Copy() *State {
 	next.coinbase = s.coinbase
 	next.blockNumber = s.blockNumber
 	next.blockTime = s.blockTime
+	next.origin = s.origin
+	next.gasPrice = s.gasPrice
+	next.readOnly = s.readOnly
+	next.transient = copySlots(s.transient)
+	next.created = copyAddrSet(s.created)
+	next.destructed = copyAddrSet(s.destructed)
+	if len(s.blockHashes) > 0 {
+		next.blockHashes = make(map[uint64]Hash, len(s.blockHashes))
+		for n, sum := range s.blockHashes {
+			next.blockHashes[n] = sum
+		}
+	}
 	for k, v := range s.accounts {
 		next.accounts[k] = v
 	}
@@ -63,6 +84,45 @@ func (s *State) SetCoinbase(a Address) {
 func (s *State) SetBlock(number, time uint64) {
 	s.blockNumber = number
 	s.blockTime = time
+}
+
+// NoteBlockHash 记下某一高度的区块哈希，供这一拍的 BLOCKHASH 读取。
+// 只留最近 256 块。更早的删掉。这项不写进状态根。
+func (s *State) NoteBlockHash(height uint64, sum Hash) {
+	if s.blockHashes == nil {
+		s.blockHashes = make(map[uint64]Hash)
+	}
+	s.blockHashes[height] = sum
+	if height > 256 {
+		delete(s.blockHashes, height-257)
+	}
+}
+
+// beginTx 开始执行一笔交易。ORIGIN 和 GASPRICE 读这里记下的发送方和单价。
+// 上一笔留下的瞬时存储、新建和自毁标记清掉。只读标记也清掉。
+func (s *State) beginTx(origin Address, gasPrice uint64) {
+	s.origin = origin
+	s.gasPrice = gasPrice
+	s.readOnly = false
+	s.transient = nil
+	s.created = nil
+	s.destructed = nil
+}
+
+// endTx 丢掉只在这一笔里有效的执行上下文。账户、代码和存储不动。
+func (s *State) endTx() {
+	s.readOnly = false
+	s.transient = nil
+	s.created = nil
+	s.destructed = nil
+}
+
+// blockHash 返回高度 n 的区块哈希。n 不在 [当前高度-256, 当前高度) 里时是 0。
+func (s *State) blockHash(n uint64) Hash {
+	if n >= s.blockNumber || s.blockNumber-n > 256 {
+		return Hash{}
+	}
+	return s.blockHashes[n]
 }
 
 func (s *State) GetAccount(a Address) (Account, bool) {
@@ -213,4 +273,95 @@ func codeHash(code []byte) Hash {
 		return keccak(nil)
 	}
 	return keccak(code)
+}
+
+// GetTransient 读取瞬时存储。没写过的槽是 0。
+func (s *State) GetTransient(a Address, key Hash) Hash {
+	slots := s.transient[a]
+	if slots == nil {
+		return Hash{}
+	}
+	return slots[key]
+}
+
+// SetTransient 写入瞬时存储。写成 0 就删掉这个槽。
+func (s *State) SetTransient(a Address, key, val Hash) {
+	slots := s.transient[a]
+	if slots == nil {
+		slots = make(map[Hash]Hash)
+		if s.transient == nil {
+			s.transient = make(map[Address]map[Hash]Hash)
+		}
+		s.transient[a] = slots
+	}
+	if val == (Hash{}) {
+		delete(slots, key)
+		return
+	}
+	slots[key] = val
+}
+
+// markCreated 记下这个地址是这笔交易新建的。失败的创建会随快照一起丢掉。
+func (s *State) markCreated(a Address) {
+	if s.created == nil {
+		s.created = make(map[Address]bool)
+	}
+	s.created[a] = true
+}
+
+// markDestructed 记下这个地址执行了 SELFDESTRUCT。真正删除要等交易成功结束。
+func (s *State) markDestructed(a Address) {
+	if s.destructed == nil {
+		s.destructed = make(map[Address]bool)
+	}
+	s.destructed[a] = true
+}
+
+// finishSelfDestruct 处理这笔交易里的 SELFDESTRUCT。
+// 只有本笔新建的合约才删代码和存储。更早部署的合约只是已经把余额转走，代码还在。
+// 删除时余额若又被转入，账户留下余额，nonce 归零，代码和存储清掉。
+func (s *State) finishSelfDestruct() {
+	for addr := range s.destructed {
+		if !s.created[addr] {
+			continue
+		}
+		s.SetCode(addr, nil)
+		delete(s.storage, addr)
+		acct, ok := s.GetAccount(addr)
+		if !ok {
+			continue
+		}
+		if acct.Balance == 0 {
+			s.DeleteAccount(addr)
+			continue
+		}
+		acct.Nonce = 0
+		s.SetAccount(acct)
+	}
+}
+
+func copySlots(src map[Address]map[Hash]Hash) map[Address]map[Hash]Hash {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[Address]map[Hash]Hash, len(src))
+	for addr, slots := range src {
+		cloned := make(map[Hash]Hash, len(slots))
+		for key, val := range slots {
+			cloned[key] = val
+		}
+		out[addr] = cloned
+	}
+	return out
+}
+
+func copyAddrSet(src map[Address]bool) map[Address]bool {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[Address]bool, len(src))
+	for addr := range src {
+		out[addr] = true
+	}
+	return out
 }

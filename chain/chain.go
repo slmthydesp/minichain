@@ -190,6 +190,7 @@ func (c *Chain) Mine(coinbase Address, timestamp uint64) (Block, error) {
 	scratch := c.state.Copy()
 	scratch.SetCoinbase(coinbase)
 	scratch.SetBlock(head.Height+1, timestamp)
+	scratch.NoteBlockHash(head.Height, head.Hash())
 	// 一位发送方在本块里排成一队。PendingTxs 已按地址、再按 nonce 排好，地址一变就换下一位。
 	type lane struct {
 		sender Address // 这一队的发送方。单价相同时用它和别的队比地址。
@@ -329,6 +330,7 @@ func (c *Chain) Append(b Block) error {
 	scratch := c.states[b.ParentHash].Copy()
 	scratch.SetCoinbase(b.Coinbase)
 	scratch.SetBlock(b.Height, b.Time)
+	scratch.NoteBlockHash(parent.Height, parent.Hash())
 	var gasUsed uint64
 	var gasLimitUsed uint64
 	receipts := make([]Receipt, 0, len(b.Txs))
