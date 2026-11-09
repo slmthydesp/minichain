@@ -8,6 +8,7 @@ import (
 )
 
 func TestAccountFieldsRoundTrip(t *testing.T) {
+	// mock the address
 	var addr Address
 	addr[19] = 7
 	got := Account{Address: addr, Balance: 42, Nonce: 3}
@@ -16,20 +17,13 @@ func TestAccountFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTxSigningAndCanonicalBytes(t *testing.T) {
+func TestTxSigningBytes(t *testing.T) {
 	var to Address
 	to[19] = 1
 	tx := Tx{To: to, Value: 9, Nonce: 4, Sig: bytes.Repeat([]byte{0xab}, 65)}
 	sign := tx.SigningBytes()
 	if len(sign) != 64 {
 		t.Fatalf("signing bytes len = %d", len(sign))
-	}
-	canon := tx.CanonicalBytes()
-	if len(canon) != 129 {
-		t.Fatalf("canonical len = %d", len(canon))
-	}
-	if !bytes.Equal(canon[:64], sign) || !bytes.Equal(canon[64:], tx.Sig) {
-		t.Fatal("canonical bytes are not signing bytes plus signature")
 	}
 	if sign[19] != 1 || sign[27] != 9 || sign[35] != 4 {
 		t.Fatalf("signing layout = %x", sign)
@@ -69,25 +63,6 @@ func TestParseAddressAndHashRejectBadInput(t *testing.T) {
 	}
 }
 
-func TestCanonicalBytesAreAlways125(t *testing.T) {
-	var to Address
-	to[19] = 1
-	short := Tx{To: to, Value: 1, Nonce: 2, Sig: []byte{1, 2, 3}}
-	long := Tx{To: to, Value: 1, Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
-	for _, tx := range []Tx{short, long} {
-		canon := tx.CanonicalBytes()
-		if len(canon) != 129 {
-			t.Fatalf("canonical len = %d", len(canon))
-		}
-		if !bytes.Equal(canon[:64], tx.SigningBytes()) {
-			t.Fatal("canonical prefix is not the signing bytes")
-		}
-	}
-	if !bytes.Equal(long.CanonicalBytes()[64:], long.Sig[:65]) {
-		t.Fatal("canonical signature was not the first 65 bytes")
-	}
-}
-
 func TestSignRecoversDemoAddress(t *testing.T) {
 	key := demoKey(t)
 	var to Address
@@ -96,8 +71,8 @@ func TestSignRecoversDemoAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tx.Sig) != 65 || len(tx.CanonicalBytes()) != 129 {
-		t.Fatalf("sig len = %d canonical len = %d", len(tx.Sig), len(tx.CanonicalBytes()))
+	if len(tx.Sig) != 65 {
+		t.Fatalf("sig len = %d", len(tx.Sig))
 	}
 	got, err := tx.Sender()
 	if err != nil {

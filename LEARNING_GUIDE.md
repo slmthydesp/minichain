@@ -1,6 +1,6 @@
 # minichain 学习指南
 
-minichain 是一条只存在内存里的链。账户可以只存余额，也可以带上代码和存储。每个进程都出块，也向对等方拉块。同一父块上可以分叉；节点按「高度更大，同高度则哈希更小」选出链头，换链头时把被放弃的交易退回交易池。链头往前 12 块已经最终确定，从更早的高度分出去的叉不能再成为链头。两边对规范链算出同一个状态根。它用来建立「账户、签名、chain id、gas、交易池、执行、回执、出块、分叉、同步」这条链路。执行是一台很小的虚拟机：没有代码的收款方仍是转账，有代码就按操作码执行。没有 data 的转账起步 gas 是 21000。
+minichain 是一条只存在内存里的链。账户可以只存余额，也可以带上代码和存储。每个进程都出块，也向对等方拉块。同一父块上可以分叉。链头一直是目前最优的那一块，新来的块只和它比：高度更大优先，同高度则哈希更小。换链头时把被放弃的交易退回交易池。链头往前 12 块已经最终确定，只有这一块和它的后代还能参与比较；从更早处分出去的叉仍会保存，但不能再成为链头。两边对规范链算出同一个状态根。它用来建立「账户、签名、chain id、gas、交易池、执行、回执、出块、分叉、同步」这条链路。执行是一台很小的虚拟机：没有代码的收款方仍是转账，有代码就按操作码执行。没有 data 的转账起步 gas 是 21000。
 
 建议按下面的顺序读，每一层都先看测试再看实现。
 
@@ -100,8 +100,6 @@ Go 的 map 不允许一边读一边写，并发写会直接崩溃。交易池是
 └─────────┴─────────┴──────────┴──────────┴──────────┴──────────┘
 to 不出现才是创建。to 是 20 个 0 是转给零地址，不是创建。data 可以是空的：创建时它是初始代码，调用时它是调用数据。
 
-规范交易 = 签名原文 + 65 字节签名。没有 data 的调用共 129 字节。
-
 区块哈希原文
 ┌────────────┬────────────┬────────────────────┬──────────────┬──────────────┬────────────┬──────────┬──────────┬────────┐
 │ parent  32 │ state   32 │ transactions    32 │ receipts  32 │ coinbase  20 │ gasLimit 8 │ gasUsed 8│ height 8 │ time 8 │
@@ -110,11 +108,11 @@ to 不出现才是创建。to 是 20 个 0 是转给零地址，不是创建。d
 
 状态根、交易根、回执根都是十六叉 Merkle Patricia Trie。节点用 RLP 编码。小于 32 字节的节点嵌进父节点，否则放 Keccak-256。根再哈希一次。空树的根是 Keccak-256(0x80)，`56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421`。
 
-状态树的键是地址的 Keccak-256，值是 `nonce`、余额、`storageRoot`、`codeHash` 的 RLP 列表。没有代码时 `codeHash` 是空字节的 Keccak-256。没有存储时 `storageRoot` 是空树根。交易树和回执树的键是序号的 RLP。交易树的值是规范交易。回执树的值是 status、gasUsed、cumulativeGasUsed 和日志的 RLP 列表。交易原文留在区块体里，不直接拼进区块哈希。
+状态树的键是地址的 Keccak-256，值是 `nonce`、余额、`storageRoot`、`codeHash` 的 RLP 列表。没有代码时 `codeHash` 是空字节的 Keccak-256。没有存储时 `storageRoot` 是空树根。交易树和回执树的键是序号的 RLP。交易树的值是交易的 RLP 列表，顺序是 nonce、gasPrice、gasLimit、to、value、data、chainId、sig。创建合约时 to 是空字符串。回执树的值是 status、gasUsed、cumulativeGasUsed 和日志的 RLP 列表。交易原文留在区块体里，不直接拼进区块哈希。
 
 创世状态里有演示账户，所以创世状态根不是空树根。创世块没有交易和回执，那两个根是空树根。
 
-`Put` 插入或覆盖，`Delete` 删除。余额变成 0 不会自动删账户。同一批账户无论以什么顺序放入，根都相同。
+`SetAccount` 插入或覆盖，`DeleteAccount` 删除。余额变成 0 不会自动删账户。同一批账户无论以什么顺序放入，根都相同。
 
 ## 签名和地址
 - sig/sig.go: Recover 函数
@@ -146,7 +144,7 @@ flowchart LR
 | 签名 | 恢复失败 → `bad signature` | 同样 |
 | chain id | 不是 `6666` → `wrong chain id` | 同样，而且排在余额检查之前 |
 | gas | `gasLimit` 小于起步 gas → `intrinsic gas`。转账从 21000 起，创建从 53000 起，data 里零字节加 4，非零字节加 16 | 同样。实际消耗按执行计算，不是按 `gasLimit` 收。gas 用尽时消耗整个 `gasLimit` |
-| 费用预留 | 这一笔，加上同一发送方已经在池里的其他交易，`value + gasLimit * gasPrice` 之和大于余额 → `insufficient balance` | 实际从发送方扣除 `value + gasUsed * gasPrice`。回退时 value 会退回，费用仍扣 |
+| 费用预留 | 这一笔，加上从账户 nonce 起连续占住的交易，`value + gasLimit * gasPrice` 之和大于余额 → `insufficient balance`。号码断开之后的不计入这笔总和 | 实际从发送方扣除 `value + gasUsed * gasPrice`。回退时 value 会退回，费用仍扣 |
 | nonce | 小于账户当前值 → `nonce too low`。大于当前值可以进池。同一发送方、同一 nonce 已在池中时，只有 `gasPrice` 严格更高才替换，否则 `replacement underpriced` | 必须等于当前 nonce，否则 `nonce mismatch` |
 | 溢出 | `gasLimit * gasPrice` 或再加上 `value` 超出 `uint64` → `balance overflow` | 收款方或 coinbase 入账溢出同样是 `balance overflow`，状态不动 |
 | 成功后 | 放进池，或替换同 nonce 的旧交易 | 签名和余额通过后就会入块。执行成功时状态是 1，nonce 加 1，代码和存储留下。回退或 gas 用尽时状态是 0，nonce 仍加 1，这次改过的状态丢掉。coinbase 得到 `gasUsed * gasPrice` |
@@ -155,7 +153,7 @@ flowchart LR
 
 `Apply` 先复制状态。签名、chain id、gas 或余额不过关时，原状态不动，这笔交易不能入块。执行回退时换回副本，只保留 nonce 和 gas 费用。
 
-`Pending` 的顺序是发送方地址升序，同一发送方再按 nonce 升序。出块不按这个顺序装，装块时在各账户的下一笔里选 gas 单价。
+`PendingTxs` 的顺序是发送方地址升序，同一发送方再按 nonce 升序。出块不按这个顺序装，装块时在各账户的下一笔里选 gas 单价。
 
 ## 合约和回执
 
@@ -165,7 +163,187 @@ flowchart LR
 
 状态树里的账户是 `nonce`、余额、`storageRoot`、`codeHash`。每个合约另有一棵存储树，键是 32 字节槽位的 Keccak-256，值为零的槽会被删掉。
 
-回执记下状态、本笔 gas、累计 gas 和日志。执行成功时状态是 1，日志留下。`REVERT` 或 gas 用尽时状态是 0，日志丢掉，nonce 和费用留下，余额、代码和存储回到执行前。签名错误、chain id 不对、gas 不够起步、nonce 不对、余额不够，这些交易不入块，状态也不动。日志写进回执树，所以回执根会随日志变化。区块头里没有 logsBloom。
+回执记下状态、本笔 gas、累计 gas 和日志。执行成功时状态是 1，日志留下。`REVERT` 或停机时状态是 0，日志丢掉，nonce 和费用留下，余额、代码和存储回到执行前。签名错误、chain id 不对、gas 不够起步、nonce 不对、余额不够，这些交易不入块，状态也不动。日志写进回执树，所以回执根会随日志变化。区块头里没有 logsBloom。
+
+## 复杂代码分析
+
+`Apply` 是一笔交易改状态的入口。它自己不跑字节码，只串起准入、执行、留下什么、收费。下面每张图对应一个函数，分支和代码里的 `if` 一致。
+
+### Apply
+
+准入失败、执行出错、收费失败，这三种都没有回执，状态回到调用前，这笔不能入块。回退和停机仍有回执。`restore` 换回的是快照的一份新拷贝，后面再改 nonce 或扣费，不会写进原来那份快照，所以收费失败还能再换回去。
+
+```mermaid
+sequenceDiagram
+  participant Apply
+  participant checkedSender
+  participant State
+  participant executeTx
+  participant commitExec
+  participant receiptFor
+
+  Apply->>checkedSender: 恢复签名，检查 chain id、gas、余额、nonce
+  alt 准入失败
+    checkedSender-->>Apply: error
+    Note over Apply: 状态不动，无回执
+  else 准入通过
+    Apply->>State: Copy 快照
+    Apply->>executeTx: 扣起步 gas，然后转账或创建
+    alt 起步 gas 算不出来，或转账失败
+      executeTx-->>Apply: error
+      Apply->>State: restore 快照
+      Note over Apply: 无回执。这不是回退或停机
+    else 执行完成
+      executeTx-->>Apply: execResult
+      Apply->>commitExec: 按 Kind 决定留下什么
+      commitExec-->>Apply: status、剩余 gas、日志
+      Apply->>receiptFor: 按用掉的 gas 收费
+      alt 费用溢出，或扣费、入账失败
+        receiptFor-->>Apply: error
+        Apply->>State: restore 执行前的快照
+        Note over Apply: 无回执
+      else 收费成功
+        receiptFor-->>Apply: Receipt
+      end
+    end
+  end
+```
+
+### commitExec
+
+成功时状态保持执行后的样子。回退和停机都先换回快照，再把 nonce 加 1，日志丢掉，回执状态是 0。`executeTx` 里已经加过一次 nonce，那一次随快照丢掉，所以结果仍然只加 1。两者的差别只在剩余 gas：回退退回没花完的，停机按整个 `gasLimit` 收。
+
+```mermaid
+sequenceDiagram
+  participant commitExec
+  participant State
+
+  alt Kind 是 execOK
+    Note over commitExec: status 1，日志保留，剩余 gas 原样
+  else 回退或停机
+    commitExec->>State: restore 快照
+    commitExec->>State: bumpNonce
+    alt Kind 是 execHalt
+      Note over commitExec: status 0，日志丢掉，剩余 gas 记为 0
+    else Kind 是 execRevert
+      Note over commitExec: status 0，日志丢掉，剩余 gas 是停下来时还剩的
+    end
+  end
+```
+
+### executeTx
+
+先扣起步 gas，再给发送方 nonce 加 1。创建走 `executeCreate`。调用先转 `value`，收款方没有代码就到此结束，剩下的 gas 原样退回。有代码才把 `tx.Data` 当调用数据交给 `runCode`。转账失败是 error，不是回退。
+
+```mermaid
+sequenceDiagram
+  participant executeTx
+  participant State
+  participant executeCreate
+  participant runCode
+
+  executeTx->>executeTx: 计算起步 gas
+  alt 起步 gas 溢出，或 gasLimit 不够
+    Note over executeTx: error。nonce 还没加
+  else 起步 gas 够
+    executeTx->>State: bumpNonce 发送方
+    alt 创建合约
+      executeTx->>executeCreate: tx.Data 是初始代码
+      executeCreate-->>executeTx: execResult
+    else 调用或转账
+      executeTx->>State: transfer value
+      alt 余额不够，或收款方入账溢出
+        State-->>executeTx: error
+      else 转账成功且没有代码
+        Note over executeTx: execOK，剩下的 gas 原样退回
+      else 转账成功且有代码
+        executeTx->>runCode: depth 从 1 起，input 是 tx.Data
+        runCode-->>executeTx: 日志、剩余 gas、execKind
+      end
+    end
+  end
+```
+
+### executeCreate
+
+地址用交易里的 `tx.Nonce`，也就是创建前的号码。这个地址上已经有合约就不能覆盖，整笔停机。新合约的 nonce 先写成 1，再跑初始代码。`RETURN` 出来的字节才存成代码，每字节再收 200 gas，最长 24576 字节。初始代码回退或停机时不保存代码。
+
+```mermaid
+sequenceDiagram
+  participant executeCreate
+  participant State
+  participant runCode
+
+  executeCreate->>executeCreate: CreateAddress(sender, tx.Nonce)
+  alt 地址上已有合约
+    Note over executeCreate: execHalt，不覆盖
+  else 可以创建
+    executeCreate->>State: transfer value
+    alt 新地址入账溢出
+      State-->>executeCreate: error
+    else 转账成功
+      executeCreate->>State: 新合约 nonce 写成 1
+      executeCreate->>runCode: input 是 nil，code 是 tx.Data
+      runCode-->>executeCreate: 返回字节、日志、剩余 gas、execKind
+      alt 回退或停机
+        Note over executeCreate: 不保存代码
+      else 代码超过 24576 字节，或剩余 gas 不够每字节 200
+        Note over executeCreate: 改成 execHalt，不保存代码
+      else 成功
+        executeCreate->>State: SetCode
+        Note over executeCreate: 剩余 gas 再减去代码存款
+      end
+    end
+  end
+```
+
+### runCode
+
+`runCode` 跑一帧。`STOP` 或 `RETURN` 是成功。合约执行 `REVERT` 是回退，剩余 gas 退回。gas 用尽、非法操作码、栈错误、步数耗尽是停机，这一帧剩下的 gas 全部扣掉。代码自己走到末尾也算成功，只是没有返回数据。
+
+```mermaid
+sequenceDiagram
+  participant runCode
+  participant machine
+
+  loop 程序计数器还在代码里，且步数还够
+    runCode->>machine: 执行当前操作码
+    alt STOP 或 RETURN
+      machine-->>runCode: 停机成功
+      Note over runCode: execOK。返回数据和日志留下
+    else REVERT
+      machine-->>runCode: 回退
+      Note over runCode: execRevert。返回数据和日志丢掉，剩余 gas 退回
+    else 操作码失败
+      machine-->>runCode: 停机
+      Note over runCode: execHalt。返回数据和日志丢掉，剩余 gas 是 0
+    end
+  end
+  Note over runCode: 代码跑完也是 execOK。没有返回数据，日志留下
+```
+
+`CALL` 再开一帧。转出的 gas 不超过本帧剩余的 63/64。内层回退或停机只恢复这次调用前的快照，外层栈上得到 0，外层自己仍可以成功。回退会把没花完的 gas 退给外层，停机不退。
+
+```mermaid
+sequenceDiagram
+  participant 外层
+  participant State
+  participant 内层
+
+  外层->>State: Copy 这次调用前的快照
+  外层->>State: transfer 这次调用的金额
+  外层->>内层: runCode，depth 加 1
+  内层-->>外层: 返回数据、日志、剩余 gas、execKind
+  alt 内层 execOK
+    Note over 外层: 日志并进外层，返回数据写入内存，栈上压入 1
+  else 内层回退
+    外层->>State: restore 这次调用前的快照
+    Note over 外层: 栈上压入 0，剩余 gas 退回外层
+  else 内层停机
+    外层->>State: restore 这次调用前的快照
+    Note over 外层: 栈上压入 0，转出的 gas 不退
+  end
+```
 
 ## 出块
 
@@ -174,7 +352,7 @@ flowchart LR
 ```mermaid
 flowchart TD
   start["Mine(coinbase, timestamp)<br/>时间必须大于父块"] --> scratch["复制头状态"]
-  scratch --> pending["取出 Pending，按发送方分成队列"]
+  scratch --> pending["取出 PendingTxs，按发送方分成队列"]
   pending --> pick{"在各队列的下一笔里<br/>选 gasPrice 更高的<br/>单价相同则地址更小"}
   pick -->|"没有可选的"| seal["封块"]
   pick -->|"选中"| apply{"nonce 连续，gasLimit 装得下，且签名、余额通过?"}
@@ -183,13 +361,13 @@ flowchart TD
   take --> pick
   leave --> pick
   seal --> block["新块：高度 = 头 + 1<br/>时间 = timestamp<br/>父哈希 = 头哈希<br/>coinbase = 本进程<br/>交易 = 选中的那些<br/>状态根 = 副本的根<br/>交易根、回执根 = 两棵树"]
-  block --> choice["只在延伸最终确定区块的链里选链头<br/>高度更大优先，同高度哈希更小优先"]
-  choice --> commit["若链头变了：退回被放弃分支的交易<br/>删掉新规范链里的交易<br/>状态换成新链头的副本"]
+  block --> choice["prefer：父块在候选里才和当前链头比<br/>高度更大优先，同高度哈希更小优先"]
+  choice --> commit["若链头变了：退回被放弃分支的交易<br/>删掉新规范链里的交易<br/>状态换成新链头的副本<br/>候选收成新的最终确定区块及其后代"]
 ```
 
 同一账户仍按 nonce 从当前值连续装。不同账户之间，比较的是各自下一笔的 `gasPrice`，更高的先装；单价一样时地址更小的先装。碰到缺口、这笔的 `gasLimit` 大于区块剩余 gas，或者这笔交易签名和余额不过关，就停在这个发送方。回退的交易仍然入块，后面的 nonce 可以继续装。装块时按 `gasLimit` 占区块 gas，记账时 `gasUsed` 加的是实际消耗。
 
-池会把同一发送方的待处理交易加在一起占余额。`gasLimit` 为 `21000`、`gasPrice` 为 `1` 时，一笔要预留 `value + 21000`。下面用余额 `1000000` 说明预留，这不是创世余额；创世账户有 1 个币，放得下这些数。余额 `1000000` 时，nonce 0 转 `979000` 可以进池，预留刚好是 `1000000`。nonce 1 再转 `979000` 会被拒绝，两笔合起来是 `2000000`。每笔只转 `1` 时，两笔都能进池。出块先执行 nonce 0。coinbase 不是发送方时，发送方余额变成 0；发送方自己就是 coinbase 时，费用会加回，余额剩下 `21000`。两种情况下，如果 nonce 1 预留超过当时的余额，它就进不了池。
+池会把从账户 nonce 起、中间没有空号的交易加在一起占余额。号码断开之后的交易只和这段连续交易比较，不彼此累加。`gasLimit` 为 `21000`、`gasPrice` 为 `1` 时，一笔要预留 `value + 21000`。下面用余额 `1000000` 说明预留，这不是创世余额；创世账户有 1 个币，放得下这些数。余额 `1000000` 时，nonce 0 转 `979000` 可以进池，预留刚好是 `1000000`。nonce 1 再转 `979000` 会被拒绝，两笔合起来是 `2000000`。每笔只转 `1` 时，两笔都能进池。出块先执行 nonce 0。coinbase 不是发送方时，发送方余额变成 0；发送方自己就是 coinbase 时，费用会加回，余额剩下 `21000`。两种情况下，如果 nonce 1 预留超过当时的余额，它就进不了池。
 
 ## 跟块
 
@@ -204,7 +382,7 @@ flowchart TD
 5. 用区块体里的交易重算交易根，必须等于块上的 `transactionsRoot`
 6. 在父块状态的副本上按顺序 `Apply`。实际消耗之和必须等于块上的 `gasUsed`。状态根必须等于块里的 `stateRoot`，回执根必须等于块里的 `receiptsRoot`
 
-通过后保存块和状态副本，再选链头。链头往前数 12 块（高度不到 12 时就是创世块）是最终确定的。不包含这个块的分叉仍会保存，但选链头时跳过它。新链头上的交易从池里删除。旧链头上、且新链没有花掉同一发送方和 nonce 的交易，按新状态重新进池。侧链上的块留在内存里，`BlocksAfter` 只列出规范链。
+通过后保存块和状态副本，再调用 `prefer`。`eligible` 里是当前最终确定区块和它的后代，创世时只有创世块。链头往前数 12 块（高度不到 12 时就是创世块）是最终确定的。新块的父块不在 `eligible` 里，就说明这条叉从最终确定点前面分出去，链头不动，块本身仍保存。父块在里面，才把新块放进 `eligible`，并和当前链头比：更高的赢，同高则哈希字节更小的赢。链头本来就是目前的最优块，所以不用再扫描 `blocks`。换链头之后 `keepEligible` 把不再从新的最终确定区块延伸出来的哈希拿掉，候选因此只覆盖最后这十几块。新链头上的交易从池里删除。旧链头上、且新链没有花掉同一发送方和 nonce 的交易，按新状态重新进池。侧链上的块留在 `blocks` 里，`BlocksAfter` 只列出规范链。
 
 A 和 B 同时出块时，链头会短暂不同。两边把对方缺的块拉齐之后，手里是同一批区块，用同一条规则选链头，所以不会来回翻。状态整份换成赢的那条链头执行完的快照，不会把两套余额拼在一起。分叉点已经落在最终确定区块之前时，对方更长的链会存下来，但不会成为链头，两边就各自留下。
 
@@ -293,9 +471,9 @@ go run ./cmd/send \
 - `Account.Nonce` 就是以太坊账户 nonce：交易入块就加 1，回退也加，用来挡住重放。
 - 交易池是一个简化的 txpool。这里允许未来 nonce 进池，出块要求从当前 nonce 连续执行。同一 nonce 只有 gas 单价严格更高才替换。
 - 没有 data 的转账起步 gas 是 `21000`。创建合约从 `53000` 起，data 按字节加价，代码按每字节 `200` 收取。费用进区块的 coinbase。区块 gas 上限是 `100000`。操作码只有压栈、加减、存储、调用、返回、回退和日志这一小部分。没有 EIP-1559。
-- `State.Root`、`TransactionsRoot`、`ReceiptsRoot` 都是 Merkle Patricia Trie 的根。状态树的键是地址哈希，值包含存储根和代码哈希。每个合约另有一棵存储树。交易树和回执树的键是序号的 RLP。
+- `StateRoot`、`TransactionsRoot`、`ReceiptsRoot` 都是 Merkle Patricia Trie 的根。状态树的键是地址哈希，值包含存储根和代码哈希。每个合约另有一棵存储树。交易树和回执树的键是序号的 RLP。
 - `Block.Hash` 把父哈希、三个树根、coinbase、gas、高度和时间绑在一起。改其中任何一项，哈希都变，子块的父哈希就对不上。交易原文在区块体里。
-- 多个进程出块对应短程分叉。这里用块数做链头选择，同高度比哈希。链头往前 12 块之后不能再被换掉，这是一个很短的最终性，不是信标链投票。没有节点发现，也没有落盘。链只在进程内存里，退出即丢失。
+- 多个进程出块对应短程分叉。这里用块数做链头选择，同高度比哈希。链头往前 12 块之后不能再被换掉，这是一个很短的最终性，不是信标链投票。选链头不扫描全部历史块：`eligible` 只留最终确定区块及其后代，新块只和当前链头比。最终确定点前移时，更早的分叉离开候选，块本身仍留在内存里。没有节点发现，也没有落盘。链只在进程内存里，退出即丢失。
 - 换链头时退回被放弃分支的交易，对应节点重组时把孤儿块里的交易放回交易池。
 - 签名恢复发送方，和以太坊从签名恢复 `from` 是同一件事。chain id `6666` 写在 `data` 长度之前。恢复标记仍是 27 或 28，没有把 chain id 编进 `v`。
 - 合约地址是 `Keccak-256(RLP(sender, nonce))` 的后 20 字节，nonce 用创建前的值。初始代码 `RETURN` 出来的字节才是合约代码。成功的日志留在回执里，回退的日志丢掉。

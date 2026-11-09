@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Golang Debug",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${fileDirname}/${fileBasenameNoExtension}.go",
+            "env": {
+                "GF_ENV": "dev"
+            },
+            "args": [],
+            // 可选：把控制台改成集成终端，支持输入
+            "console": "integratedTerminal",
+            // 关掉调试器自己的日志，避免干扰
+            "showLog": false
+        }
+    ]
+}

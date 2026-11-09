@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/slmthydesp/minichain/sig"
@@ -32,6 +33,13 @@ type Tx struct {
 	Sig      []byte
 }
 
+// Clone 复制这笔交易。Data 和 Sig 是切片，值拷贝仍共用底层数组，所以这两段单独拷一份。
+func (tx Tx) Clone() Tx {
+	tx.Data = bytes.Clone(tx.Data)
+	tx.Sig = bytes.Clone(tx.Sig)
+	return tx
+}
+
 // SigningBytes 是被签名的原文，整数都是大端。
 // 调用时先放 to(20)，创建合约时没有这 20 字节。
 // 后面是 value(8) + nonce(8) + gasLimit(8) + gasPrice(8) + chainId(8) + dataLen(4) + data。
@@ -58,13 +66,41 @@ func (tx Tx) SigningBytes() []byte {
 	return buf
 }
 
-// CanonicalBytes 是写进区块的规范交易：签名原文再加 65 字节签名。签名不足 65 字节时补零。
-func (tx Tx) CanonicalBytes() []byte {
-	sign := tx.SigningBytes()
-	buf := make([]byte, len(sign)+65)
-	copy(buf, sign)
-	copy(buf[len(sign):], tx.Sig)
-	return buf
+// TransactionsRoot 是交易的 Merkle Patricia Trie 根。
+// 键是这笔交易在本块中的序号，从 0 起，再做 RLP。值是这笔交易的 RLP 列表。空列表的根是空树根。
+func TransactionsRoot(txs []Tx) Hash {
+	if len(txs) == 0 {
+		return emptyTrieRoot()
+	}
+	keys := make([][]byte, len(txs))
+	vals := make([][]byte, len(txs))
+	for i, tx := range txs {
+		keys[i] = rlpUint(uint64(i))
+		vals[i] = tx.rlp()
+	}
+	return trieRoot(keys, vals)
+}
+
+// rlp 是交易树里这条记录的值。
+// 列表顺序是 nonce、gasPrice、gasLimit、to、value、data、chainId、sig。
+// 创建合约时 to 是空字符串；调用零地址时 to 仍是 20 个 0。sig 固定取 65 字节。
+func (tx Tx) rlp() []byte {
+	var to []byte
+	if !tx.Create {
+		to = tx.To[:]
+	}
+	sig := make([]byte, 65)
+	copy(sig, tx.Sig)
+	return rlpList(
+		rlpUint(tx.Nonce),
+		rlpUint(tx.GasPrice),
+		rlpUint(tx.GasLimit),
+		rlpString(to),
+		rlpUint(tx.Value),
+		rlpString(tx.Data),
+		rlpUint(tx.ChainID),
+		rlpString(sig),
+	)
 }
 
 // Sender 从签名恢复发送方。签名原文里的字段被改掉以后，恢复出的地址不再是原签名者。

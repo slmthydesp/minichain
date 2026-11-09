@@ -101,8 +101,8 @@ func TestFollowerAcceptsTransactionAndForwardsIt(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if len(minerChain.Pool().Pending()) != 1 || len(followerChain.Pool().Pending()) != 1 {
-		t.Fatalf("pools miner=%d follower=%d", len(minerChain.Pool().Pending()), len(followerChain.Pool().Pending()))
+	if len(minerChain.Pool().PendingTxs()) != 1 || len(followerChain.Pool().PendingTxs()) != 1 {
+		t.Fatalf("pools miner=%d follower=%d", len(minerChain.Pool().PendingTxs()), len(followerChain.Pool().PendingTxs()))
 	}
 	if _, err := minerChain.Mine(chain.Address{}, minerChain.Head().Time+1); err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestFollowerAcceptsTransactionAndForwardsIt(t *testing.T) {
 	if followerChain.Head().StateRoot != minerChain.Head().StateRoot {
 		t.Fatal("state roots differ")
 	}
-	if len(minerChain.Pool().Pending()) != 0 || len(followerChain.Pool().Pending()) != 0 {
+	if len(minerChain.Pool().PendingTxs()) != 0 || len(followerChain.Pool().PendingTxs()) != 0 {
 		t.Fatal("transaction remained in a pool")
 	}
 }
@@ -176,7 +176,7 @@ func TestFollowerRejectsLocallyWithoutForwarding(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if len(minerChain.Pool().Pending()) != 0 || len(followerChain.Pool().Pending()) != 0 {
+	if len(minerChain.Pool().PendingTxs()) != 0 || len(followerChain.Pool().PendingTxs()) != 0 {
 		t.Fatal("rejected transaction was kept or forwarded")
 	}
 }
@@ -203,14 +203,14 @@ func TestFollowerDropsWhenMinerRejects(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if len(followerChain.Pool().Pending()) != 1 {
+	if len(followerChain.Pool().PendingTxs()) != 1 {
 		t.Fatal("follower dropped a locally valid transaction")
 	}
 	follower := NewFollower(followerChain, minerSrv.URL)
 	if err := follower.FollowOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(followerChain.Pool().Pending()) != 0 {
+	if len(followerChain.Pool().PendingTxs()) != 0 {
 		t.Fatal("included transaction remained pending after sync")
 	}
 }
@@ -227,7 +227,7 @@ func TestFollowerDropsWhenMinerUnreachable(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if len(followerChain.Pool().Pending()) != 1 {
+	if len(followerChain.Pool().PendingTxs()) != 1 {
 		t.Fatal("follower dropped a transaction it could not forward")
 	}
 }
@@ -262,7 +262,7 @@ func TestFollowerReportsBodyReadError(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
-	if len(followerChain.Pool().Pending()) != 1 {
+	if len(followerChain.Pool().PendingTxs()) != 1 {
 		t.Fatal("follower dropped a transaction after a failed forward read")
 	}
 }
@@ -305,7 +305,7 @@ func TestFollowerSwitchesToLongerFork(t *testing.T) {
 	if followerChain.Head().Hash() != chainB.Head().Hash() || followerChain.Head().StateRoot != chainB.Head().StateRoot {
 		t.Fatal("follower did not adopt the longer fork")
 	}
-	if !followerChain.Has(chainA.Head().Hash()) {
+	if !followerChain.HasBlock(chainA.Head().Hash()) {
 		t.Fatal("shorter fork was discarded")
 	}
 }

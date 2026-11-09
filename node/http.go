@@ -112,7 +112,7 @@ func (n *Node) handleBlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	block, ok := n.chain.Block(hash)
+	block, ok := n.chain.BlockByHash(hash)
 	if !ok {
 		http.Error(w, "unknown block", http.StatusNotFound)
 		return

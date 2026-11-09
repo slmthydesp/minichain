@@ -84,7 +84,7 @@ func (n *Node) followPeer(ctx context.Context, peer string) error {
 	}
 	seen := map[chain.Hash]bool{}
 	var pending []chain.Block
-	for !n.chain.Has(hash) {
+	for !n.chain.HasBlock(hash) {
 		if seen[hash] {
 			return fmt.Errorf("parent cycle")
 		}

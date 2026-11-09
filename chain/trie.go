@@ -1,5 +1,8 @@
 package chain
 
+// trieRoot(keys, vals) 建的是一棵 Merkle Patricia Trie，本质上是一张键值表，再把整张表哈希成一个 32 字节的根
+// 只有值、没有键的话，树只能表示「有这些回执」，不能表示「第 i 笔就是这份结果」。键把序号和内容绑在一起，所以调换两笔回执的顺序，根也会变
+
 // 十六叉 Merkle Patricia Trie。键先拆成半字节（0 到 15），末尾再加一个终止符 16，表示这里是一条完整的键。
 // 树上只有三种节点：
 //   - 叶子或扩展是 shortNode：一段共同前缀后面只接一个孩子。孩子是值时它是叶子，是另一个节点时它是扩展。
@@ -49,21 +52,6 @@ func trieRoot(keys, vals [][]byte) Hash {
 	var out Hash
 	copy(out[:], raw)
 	return out
-}
-
-// TransactionsRoot 是交易的 Merkle Patricia Trie 根。
-// 键是序号的 RLP，和以太坊一样。值是这笔交易的规范编码。
-func TransactionsRoot(txs []Tx) Hash {
-	if len(txs) == 0 {
-		return emptyTrieRoot()
-	}
-	keys := make([][]byte, len(txs))
-	vals := make([][]byte, len(txs))
-	for i, tx := range txs {
-		keys[i] = rlpUint(uint64(i))
-		vals[i] = tx.CanonicalBytes()
-	}
-	return trieRoot(keys, vals)
 }
 
 // insertTrie 把一条半字节键插进已有节点。两条键共享一段前缀时，共享部分留成 shortNode，分叉处改成 fullNode。

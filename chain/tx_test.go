@@ -11,6 +11,7 @@ import (
 
 func TestSigningBytesIncludeChainID(t *testing.T) {
 	key := demoKey(t)
+	// mock the to address
 	var to Address
 	to[19] = 1
 	tx, err := Sign(key, to, 10, 3, 21000, 1, 6666)
@@ -20,13 +21,6 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 	sign := tx.SigningBytes()
 	if len(sign) != 64 {
 		t.Fatalf("signing bytes len = %d", len(sign))
-	}
-	canon := tx.CanonicalBytes()
-	if len(canon) != 129 {
-		t.Fatalf("canonical len = %d", len(canon))
-	}
-	if !bytes.Equal(canon[:64], sign) || !bytes.Equal(canon[64:], tx.Sig) {
-		t.Fatal("canonical bytes are not signing bytes plus signature")
 	}
 	var wantField [8]byte
 	binary.BigEndian.PutUint64(wantField[:], 21000)
@@ -91,6 +85,65 @@ func TestCreateOmitsToAndZeroAddressIsACall(t *testing.T) {
 	}
 }
 
+func TestTransactionTrieValueIsRLPList(t *testing.T) {
+	key := demoKey(t)
+	var to Address
+	to[19] = 1
+	tx, err := SignCall(key, to, 10, 3, 21000, 1, ChainID, []byte{0x01})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := make([]byte, 65)
+	copy(sig, tx.Sig)
+	want := transactionRLP(tx, sig)
+	if !bytes.Equal(tx.rlp(), want) {
+		t.Fatalf("rlp = %x", tx.rlp())
+	}
+	if TransactionsRoot([]Tx{tx}) != trieRoot([][]byte{rlpUint(0)}, [][]byte{want}) {
+		t.Fatal("transactions root did not use the rlp value")
+	}
+
+	create, err := SignCreate(key, 10, 0, 53000, 1, ChainID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := Sign(key, Address{}, 10, 0, 21000, 1, ChainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(create.rlp(), call.rlp()) {
+		t.Fatal("create and a call to the zero address encoded the same rlp")
+	}
+}
+
+func TestTransactionRLPSignatureIs65Bytes(t *testing.T) {
+	var to Address
+	to[19] = 1
+	short := Tx{To: to, Value: 1, Nonce: 2, Sig: []byte{1, 2, 3}}
+	long := Tx{To: to, Value: 1, Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
+	shortSig := make([]byte, 65)
+	copy(shortSig, short.Sig)
+	if !bytes.Equal(short.rlp(), transactionRLP(short, shortSig)) {
+		t.Fatalf("short sig rlp = %x", short.rlp())
+	}
+	if !bytes.Equal(long.rlp(), transactionRLP(long, long.Sig[:65])) {
+		t.Fatalf("long sig rlp = %x", long.rlp())
+	}
+}
+
+func transactionRLP(tx Tx, sig []byte) []byte {
+	return rlpList(
+		rlpUint(tx.Nonce),
+		rlpUint(tx.GasPrice),
+		rlpUint(tx.GasLimit),
+		rlpString(tx.To[:]),
+		rlpUint(tx.Value),
+		rlpString(tx.Data),
+		rlpUint(tx.ChainID),
+		rlpString(sig),
+	)
+}
+
 func TestPoolRejectsWrongChainID(t *testing.T) {
 	key := demoKey(t)
 	var to Address
@@ -102,7 +155,7 @@ func TestPoolRejectsWrongChainID(t *testing.T) {
 	if _, err := tx.Sender(); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewPool().Add(tx, 100, 0); !errors.Is(err, ErrWrongChainID) {
+	if err := NewPool().AddTx(tx, 100, 0); !errors.Is(err, ErrWrongChainID) {
 		t.Fatalf("pool err = %v", err)
 	}
 	if _, err := Apply(NewState(), tx); !errors.Is(err, ErrWrongChainID) {
