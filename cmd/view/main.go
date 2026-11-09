@@ -4,18 +4,35 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
 	"github.com/slmthydesp/minichain/view"
 )
 
+var (
+	exitFunc       = os.Exit
+	listenAndServe = http.ListenAndServe
+)
+
 func main() {
-	listen := flag.String("listen", "127.0.0.1:8080", "listen address")
-	flag.Parse()
-	fmt.Fprintf(os.Stderr, "view: listen http://%s\n", *listen)
-	if err := http.ListenAndServe(*listen, view.Handler()); err != nil {
-		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
-		os.Exit(1)
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		exitFunc(1)
 	}
+}
+
+func run(args []string) error {
+	fs := flag.NewFlagSet("view", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	listen := fs.String("listen", "127.0.0.1:8080", "listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "view: listen http://%s\n", *listen)
+	if err := listenAndServe(*listen, view.Handler()); err != nil {
+		return fmt.Errorf("listen: %v", err)
+	}
+	return nil
 }

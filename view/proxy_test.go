@@ -1,6 +1,7 @@
 package view
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -155,6 +156,44 @@ func TestBlocksQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestForwardFailures(t *testing.T) {
+	rec := httptest.NewRecorder()
+	forward(rec, "not a node", "/status")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad node %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	forward(rec, "127.0.0.1:1", "/status\n")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad url %d", rec.Code)
+	}
+
+	orig := upstreamClient
+	t.Cleanup(func() { upstreamClient = orig })
+	upstreamClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(errRead{}),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	rec = httptest.NewRecorder()
+	forward(rec, "127.0.0.1:9", "/status")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("body %d", rec.Code)
+	}
+}
+
+type errRead struct{}
+
+func (errRead) Read([]byte) (int, error) { return 0, errors.New("read") }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestUnreachable(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

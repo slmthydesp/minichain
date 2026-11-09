@@ -57,6 +57,16 @@ func TestUint256AddSubAndRLP(t *testing.T) {
 	}
 }
 
+func TestUnmarshalJSONRejects(t *testing.T) {
+	two256 := "115792089237316195423570985008687907853269984665640564039457584007913129639936"
+	for _, raw := range []string{`""`, `"\q"`, ``, `nope`, `-1`, `"` + two256 + `"`} {
+		var u Uint256
+		if err := json.Unmarshal([]byte(raw), &u); err == nil {
+			t.Fatalf("accepted %q", raw)
+		}
+	}
+}
+
 func TestWideValueTransfer(t *testing.T) {
 	var value Uint256
 	value[23] = 1

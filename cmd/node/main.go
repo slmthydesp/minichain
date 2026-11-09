@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -17,13 +18,33 @@ import (
 	"github.com/slmthydesp/minichain/node"
 )
 
+var (
+	exitFunc  = os.Exit
+	fatalFunc = log.Fatal
+	unixNow   = func() uint64 { return uint64(time.Now().Unix()) }
+	mineAt    = func(c *chain.Chain, coinbase chain.Address, timestamp uint64) (chain.Block, error) {
+		return c.Mine(coinbase, timestamp)
+	}
+)
+
 func main() {
-	listen := flag.String("listen", "", "listen address")
-	interval := flag.Duration("interval", 5*time.Second, "block interval")
-	peersFlag := flag.String("peers", "", "comma-separated peer URLs")
-	poll := flag.Duration("poll", 200*time.Millisecond, "block poll interval")
-	coinbaseFlag := flag.String("coinbase", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "block coinbase")
-	flag.Parse()
+	if err := run(context.Background(), os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		exitFunc(1)
+	}
+}
+
+func run(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("node", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	listen := fs.String("listen", "", "listen address")
+	interval := fs.Duration("interval", 5*time.Second, "block interval")
+	peersFlag := fs.String("peers", "", "comma-separated peer URLs")
+	poll := fs.Duration("poll", 200*time.Millisecond, "block poll interval")
+	coinbaseFlag := fs.String("coinbase", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "block coinbase")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	peers := splitPeers(*peersFlag)
 	addr := *listen
@@ -35,8 +56,7 @@ func main() {
 	}
 	coinbase, err := chain.ParseAddress(*coinbaseFlag)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "coinbase: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("coinbase: %v", err)
 	}
 	c := chain.New()
 	n := node.New(c, peers)
@@ -44,32 +64,43 @@ func main() {
 	srv := &http.Server{Addr: addr, Handler: n.Handler()}
 	go func() {
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			head := c.Head()
-			now := uint64(time.Now().Unix())
+			now := unixNow()
 			if now <= head.Time {
 				now = head.Time + 1
 			}
-			if _, err := c.Mine(coinbase, now); err != nil {
+			if _, err := mineAt(c, coinbase, now); err != nil {
 				fmt.Fprintf(os.Stderr, "mine: %v\n", err)
-				os.Exit(1)
+				exitFunc(1)
+				return
 			}
-			time.Sleep(*interval)
+			if !sleepCtx(ctx, *interval) {
+				return
+			}
 		}
 	}()
 	// 没有 peer 时，监听失败直接退出。有 peer 时，同步失败只打印，出块继续。
 	if len(peers) == 0 {
-		log.Fatal(srv.ListenAndServe())
+		fatalFunc(srv.ListenAndServe())
+		return nil
 	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(os.Stderr, "listen: %v\n", err)
-			os.Exit(1)
+			exitFunc(1)
 		}
 	}()
 	// 连不上或重新连上时各打一条。同一种状态的后续轮询不再重复打。
 	wasDown := false
 	for {
-		err := n.FollowOnce(context.Background())
+		if ctx.Err() != nil {
+			_ = srv.Shutdown(context.Background())
+			return nil
+		}
+		err := n.FollowOnce(ctx)
 		if err != nil {
 			if !wasDown {
 				fmt.Fprintf(os.Stderr, "sync: %v\n", err)
@@ -79,7 +110,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sync: connected %s\n", strings.Join(peers, ", "))
 			wasDown = false
 		}
-		time.Sleep(*poll)
+		if !sleepCtx(ctx, *poll) {
+			_ = srv.Shutdown(context.Background())
+			return nil
+		}
+	}
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

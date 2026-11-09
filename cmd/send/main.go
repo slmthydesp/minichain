@@ -18,53 +18,63 @@ import (
 	"github.com/slmthydesp/minichain/sig"
 )
 
+var (
+	exitFunc = os.Exit
+	postFunc = http.Post
+)
+
 func main() {
-	url := flag.String("url", "", "node URL")
-	toHex := flag.String("to", "", "recipient address, empty to create a contract")
-	value := flag.Uint64("value", 0, "amount in the smallest unit; 10^18 is one coin")
-	nonceStr := flag.String("nonce", "", "account nonce; empty queries the node")
-	gasLimit := flag.Uint64("gas-limit", 21000, "gas limit")
-	gasPrice := flag.Uint64("gas-price", 1, "gas price")
-	dataHex := flag.String("data", "", "hex calldata or init code")
-	keyHex := flag.String("key", sig.DemoKeyHex, "hex private key")
-	flag.Parse()
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		exitFunc(1)
+	}
+}
+
+func run(args []string) error {
+	fs := flag.NewFlagSet("send", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	url := fs.String("url", "", "node URL")
+	toHex := fs.String("to", "", "recipient address, empty to create a contract")
+	value := fs.Uint64("value", 0, "amount in the smallest unit; 10^18 is one coin")
+	nonceStr := fs.String("nonce", "", "account nonce; empty queries the node")
+	gasLimit := fs.Uint64("gas-limit", 21000, "gas limit")
+	gasPrice := fs.Uint64("gas-price", 1, "gas price")
+	dataHex := fs.String("data", "", "hex calldata or init code")
+	keyHex := fs.String("key", sig.DemoKeyHex, "hex private key")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	if *url == "" {
-		fmt.Fprintln(os.Stderr, "url is required")
-		os.Exit(1)
+		return fmt.Errorf("url is required")
 	}
 	key, err := sig.ParseKey(*keyHex)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "key: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("key: %v", err)
 	}
 	var nonce uint64
 	if *nonceStr == "" {
 		raw, err := sig.KeyAddress(key)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "key: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("key: %v", err)
 		}
 		var addr chain.Address
 		copy(addr[:], raw[:])
 		nonce, err = queryNextNonce(*url, addr.Hex())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "nonce: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("nonce: %v", err)
 		}
 		fmt.Fprintf(os.Stderr, "nonce: %d\n", nonce)
 	} else {
 		nonce, err = strconv.ParseUint(*nonceStr, 10, 64)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "nonce: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("nonce: %v", err)
 		}
 	}
 	var data []byte
 	if *dataHex != "" {
 		data, err = hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(*dataHex, "0x"), "0X"))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "data: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("data: %v", err)
 		}
 	}
 	var tx chain.Tx
@@ -75,8 +85,7 @@ func main() {
 		var to chain.Address
 		to, err = chain.ParseAddress(*toHex)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "to: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("to: %v", err)
 		}
 		toJSON = to.Hex()
 		if len(data) == 0 {
@@ -86,8 +95,7 @@ func main() {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sign: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("sign: %v", err)
 	}
 	body, err := json.Marshal(map[string]any{
 		"to":       toJSON,
@@ -100,24 +108,21 @@ func main() {
 		"sig":      "0x" + hex.EncodeToString(tx.Sig),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "json: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("json: %v", err)
 	}
-	resp, err := http.Post(*url+"/tx", "application/json", bytes.NewReader(body))
+	resp, err := postFunc(*url+"/tx", "application/json", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "post: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("post: %v", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "body: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("body: %v", err)
 	}
 	if resp.StatusCode != http.StatusNoContent {
-		fmt.Fprintf(os.Stderr, "status %d: %s\n", resp.StatusCode, respBody)
-		os.Exit(1)
+		return fmt.Errorf("status %d: %s", resp.StatusCode, respBody)
 	}
+	return nil
 }
 
 // queryNextNonce 向节点要这个地址下一笔还能放进交易池的 nonce。
