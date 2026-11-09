@@ -28,7 +28,7 @@ func NewPool() *Pool {
 // tx.Nonce 更小说明已经用过，拒绝。更大可以先挂着，等前面的号码入块后再执行。
 // 从账户 nonce 起、中间没有空号的交易也占用余额。号码断开之后的不计入这笔总和。
 // 同一 tx.Nonce 已在池里时，只有 gasPrice 更高才替换。
-func (p *Pool) AddTx(tx Tx, balance, nonce uint64) error {
+func (p *Pool) AddTx(tx Tx, balance Uint256, nonce uint64) error {
 	sender, err := tx.Sender()
 	if err != nil {
 		return ErrBadSignature
@@ -171,14 +171,15 @@ func (p *Pool) DropTx(sender Address, nonce uint64) {
 
 // senderBalanceFits 看余额够不够付这笔，以及从账户 nonce 起连续占住的交易。
 // 号码一断开就停，后面的交易不加入这笔总和。同一 nonce 用这笔替换旧的，两笔不一起算。
-func (p *Pool) senderBalanceFits(sender Address, tx Tx, balance, nonce uint64) error {
-	sum := uint64(0)
-	// 累加前先看会不会超出 uint64。费用本身溢出时 txMaxCost 已经返回错误。
-	add := func(cost uint64) error {
-		if sum > ^uint64(0)-cost {
+func (p *Pool) senderBalanceFits(sender Address, tx Tx, balance Uint256, nonce uint64) error {
+	sum := Uint256{}
+	// 累加前先看会不会超出 2^256-1。费用本身溢出时 txMaxCost 已经返回错误。
+	add := func(cost Uint256) error {
+		next, overflow := sum.Add(cost)
+		if overflow {
 			return ErrBalanceOverflow
 		}
-		sum += cost
+		sum = next
 		return nil
 	}
 	// 从账户下一笔 nonce 往上走。这个号码在池里没有交易，连续段就到此为止。
@@ -217,7 +218,7 @@ func (p *Pool) senderBalanceFits(sender Address, tx Tx, balance, nonce uint64) e
 			return err
 		}
 	}
-	if sum > balance {
+	if sum.Cmp(balance) > 0 {
 		return ErrInsufficientBalance
 	}
 	return nil

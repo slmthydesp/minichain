@@ -53,7 +53,7 @@ func (tx Tx) intrinsicGas() (uint64, error) {
 
 // checkTxAdmission 在改状态之前检查 chain id、最低 gas 和余额。
 // 预留的最高费用是 gasLimit * gasPrice，执行时按实际消耗收费。
-func checkTxAdmission(tx Tx, balance uint64) error {
+func checkTxAdmission(tx Tx, balance Uint256) error {
 	// 这些失败都发生在改状态之前，调用方可以不入块。
 	if tx.ChainID != ChainID {
 		return ErrWrongChainID
@@ -73,24 +73,25 @@ func checkTxAdmission(tx Tx, balance uint64) error {
 	// cost 是 value + gasLimit*gasPrice
 	// 上面已经要求 gasLimit 不小于起步 gas，所以这里不用再加 intrinsic
 	// 余额按用户授权的 gas 上限预留；实际扣费时才按用掉的 gas 算
-	if cost > balance {
+	if cost.Cmp(balance) > 0 {
 		return ErrInsufficientBalance
 	}
 	return nil
 }
 
 // txMaxCost 是一笔交易最多要占的余额：value 加上 gasLimit * gasPrice。
-func txMaxCost(tx Tx) (uint64, error) {
-	// 先算 gasLimit * gasPrice。这一步溢出就不再加 value。
+func txMaxCost(tx Tx) (Uint256, error) {
+	// 先算 gasLimit * gasPrice。费用仍是 uint64，这一步溢出就不再加 value。
 	maxFee, err := gasFee(tx.GasLimit, tx.GasPrice)
 	if err != nil {
-		return 0, err
+		return Uint256{}, err
 	}
-	// value 和最高费用相加也会超出 uint64。
-	if tx.Value > ^uint64(0)-maxFee {
-		return 0, ErrBalanceOverflow
+	// value 和最高费用相加超出 2^256-1 时也是溢出。
+	cost, overflow := tx.Value.Add(U256(maxFee))
+	if overflow {
+		return Uint256{}, ErrBalanceOverflow
 	}
-	return tx.Value + maxFee, nil
+	return cost, nil
 }
 
 // execResult 是一笔交易跑完、还没收手续费时的结果。
@@ -280,19 +281,22 @@ func payFee(s *State, sender Address, fee uint64) error {
 	}
 	from := s.GetAccountOrZero(sender)
 	// 先从发送方扣。余额不够就返回错误，调用方会换回快照。
-	if from.Balance < fee {
+	cost := U256(fee)
+	if from.Balance.Cmp(cost) < 0 {
 		return ErrInsufficientBalance
 	}
-	from.Balance -= fee
+	next, _ := from.Balance.Sub(cost)
+	from.Balance = next
 	s.SetAccount(from)
 	// 发送方就是 coinbase 时，这里读到的是刚扣完费的余额，再加上去就抵消了。
 	coin := s.coinbase
 	miner := s.GetAccountOrZero(coin)
 	// coinbase 入账溢出同样返回错误。发送方刚扣掉的费用会随快照退回。
-	if miner.Balance > ^uint64(0)-fee {
+	sum, overflow := miner.Balance.Add(cost)
+	if overflow {
 		return ErrBalanceOverflow
 	}
-	miner.Balance += fee
+	miner.Balance = sum
 	s.SetAccount(miner)
 	return nil
 }

@@ -11,8 +11,8 @@ func TestAccountFieldsRoundTrip(t *testing.T) {
 	// mock the address
 	var addr Address
 	addr[19] = 7
-	got := Account{Address: addr, Balance: 42, Nonce: 3}
-	if got.Address != addr || got.Balance != 42 || got.Nonce != 3 {
+	got := Account{Address: addr, Balance: U256(42), Nonce: 3}
+	if got.Address != addr || got.Balance != U256(42) || got.Nonce != 3 {
 		t.Fatalf("account = %+v", got)
 	}
 }
@@ -20,12 +20,12 @@ func TestAccountFieldsRoundTrip(t *testing.T) {
 func TestTxSigningBytes(t *testing.T) {
 	var to Address
 	to[19] = 1
-	tx := Tx{To: to, Value: 9, Nonce: 4, Sig: bytes.Repeat([]byte{0xab}, 65)}
+	tx := Tx{To: to, Value: U256(9), Nonce: 4, Sig: bytes.Repeat([]byte{0xab}, 65)}
 	sign := tx.SigningBytes()
-	if len(sign) != 64 {
+	if len(sign) != 88 {
 		t.Fatalf("signing bytes len = %d", len(sign))
 	}
-	if sign[19] != 1 || sign[27] != 9 || sign[35] != 4 {
+	if sign[19] != 1 || sign[51] != 9 || sign[59] != 4 {
 		t.Fatalf("signing layout = %x", sign)
 	}
 }
@@ -84,7 +84,7 @@ func TestSignRecoversDemoAddress(t *testing.T) {
 	}
 	var want Address
 	copy(want[:], raw[:])
-	if got != want || tx.Value != 10 || tx.Nonce != 3 || tx.To != to {
+	if got != want || tx.Value != U256(10) || tx.Nonce != 3 || tx.To != to {
 		t.Fatalf("signed tx = %+v sender = %s", tx, got.Hex())
 	}
 	if _, err := Sign([]byte{1}, to, 1, 0, 21000, 1, ChainID); err == nil {
@@ -100,7 +100,7 @@ func TestBlockHashChangesWhenContentsChange(t *testing.T) {
 		ParentHash: Hash{1},
 		StateRoot:  Hash{2},
 		Txs: []Tx{{
-			To: to, Value: 1, Nonce: 0,
+			To: to, Value: U256(1), Nonce: 0,
 			Sig: bytes.Repeat([]byte{3}, 65),
 		}},
 	}

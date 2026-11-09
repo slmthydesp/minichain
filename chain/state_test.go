@@ -18,8 +18,8 @@ func TestEmptyStateRoot(t *testing.T) {
 // 插入之后根不再是空树根。改余额、删掉已有账户都会改变根。
 // 删除不存在的账户不改变根。余额为 0 的账户也写进树，根不是空树根。
 func TestStateRootChangesOnPutModifyDelete(t *testing.T) {
-	a := Account{Address: Address{19: 1}, Balance: 5, Nonce: 1}
-	b := Account{Address: Address{19: 2}, Balance: 0, Nonce: 0}
+	a := Account{Address: Address{19: 1}, Balance: U256(5), Nonce: 1}
+	b := Account{Address: Address{19: 2}, Balance: U256(0), Nonce: 0}
 	left := NewState()
 	left.SetAccount(a)
 	left.SetAccount(b)
@@ -36,7 +36,7 @@ func TestStateRootChangesOnPutModifyDelete(t *testing.T) {
 		t.Fatal("insert did not change the root")
 	}
 	modified := left.Copy()
-	a.Balance = 6
+	a.Balance = U256(6)
 	modified.SetAccount(a)
 	// 只改余额，根也要变。副本上的修改不动原来那份。
 	if StateRoot(modified) == StateRoot(left) {
@@ -67,22 +67,22 @@ func TestStateRootChangesOnPutModifyDelete(t *testing.T) {
 func TestCopyAndBalanceNonce(t *testing.T) {
 	addr := Address{19: 3}
 	st := NewState()
-	st.SetAccount(Account{Address: addr, Balance: 8, Nonce: 2})
+	st.SetAccount(Account{Address: addr, Balance: U256(8), Nonce: 2})
 	copied := st.Copy()
-	copied.SetAccount(Account{Address: addr, Balance: 1, Nonce: 9})
+	copied.SetAccount(Account{Address: addr, Balance: U256(1), Nonce: 9})
 	// 改副本，原状态的余额和 nonce 不动。
 	balance, nonce := st.GetBalanceNonce(addr)
-	if balance != 8 || nonce != 2 {
+	if balance != U256(8) || nonce != 2 {
 		t.Fatalf("original balance=%d nonce=%d", balance, nonce)
 	}
 	// 副本读到的是刚写进去的 1 和 9。
 	copiedBalance, copiedNonce := copied.GetBalanceNonce(addr)
-	if copiedBalance != 1 || copiedNonce != 9 {
+	if copiedBalance != U256(1) || copiedNonce != 9 {
 		t.Fatalf("copy balance=%d nonce=%d", copiedBalance, copiedNonce)
 	}
 	// 没建过的地址按余额 0、nonce 0 读。
 	missingBalance, missingNonce := st.GetBalanceNonce(Address{19: 9})
-	if missingBalance != 0 || missingNonce != 0 {
+	if missingBalance != U256(0) || missingNonce != 0 {
 		t.Fatalf("missing balance=%d nonce=%d", missingBalance, missingNonce)
 	}
 }
@@ -93,21 +93,21 @@ func TestCopyAndBalanceNonce(t *testing.T) {
 func TestRestoreLeavesSnapshotReusable(t *testing.T) {
 	addr := Address{19: 3}
 	st := NewState()
-	st.SetAccount(Account{Address: addr, Balance: 8, Nonce: 2})
+	st.SetAccount(Account{Address: addr, Balance: U256(8), Nonce: 2})
 	snap := st.Copy()
-	st.SetAccount(Account{Address: addr, Balance: 1, Nonce: 9})
+	st.SetAccount(Account{Address: addr, Balance: U256(1), Nonce: 9})
 	// 改过之后换回快照。
 	st.restore(snap)
-	st.SetAccount(Account{Address: addr, Balance: 4, Nonce: 3})
+	st.SetAccount(Account{Address: addr, Balance: U256(4), Nonce: 3})
 	// 恢复之后又改了当前状态。快照自己还是最初的 8 和 2。
 	balance, nonce := snap.GetBalanceNonce(addr)
-	if balance != 8 || nonce != 2 {
+	if balance != U256(8) || nonce != 2 {
 		t.Fatalf("snapshot balance=%d nonce=%d", balance, nonce)
 	}
 	st.restore(snap)
 	// 同一份快照可以再用一次，当前状态回到 8 和 2。
 	balance, nonce = st.GetBalanceNonce(addr)
-	if balance != 8 || nonce != 2 {
+	if balance != U256(8) || nonce != 2 {
 		t.Fatalf("restored balance=%d nonce=%d", balance, nonce)
 	}
 }
@@ -143,9 +143,9 @@ func TestTransferInsufficientAndZeroStorageRoot(t *testing.T) {
 	st := NewState()
 	from := Address{19: 1}
 	to := Address{19: 2}
-	st.SetAccount(Account{Address: from, Balance: 1})
+	st.SetAccount(Account{Address: from, Balance: U256(1)})
 	// 转出的数量大于余额。
-	if err := st.transfer(from, to, 2); err != ErrInsufficientBalance {
+	if err := st.transfer(from, to, U256(2)); err != ErrInsufficientBalance {
 		t.Fatalf("err = %v", err)
 	}
 	// SetStorage 会直接丢掉全 0 的槽，这里绕过它，把全 0 的槽留在表里。

@@ -3,7 +3,6 @@ package chain
 import (
 	"bytes"
 	"errors"
-	"math"
 	"testing"
 
 	"github.com/slmthydesp/minichain/sig"
@@ -129,7 +128,7 @@ func TestMineAndAppend(t *testing.T) {
 		t.Fatal("mined transaction still pending")
 	}
 	acct, _ := c.Account(to)
-	if acct.Balance != 15 {
+	if acct.Balance != U256(15) {
 		t.Fatalf("recipient balance = %d", acct.Balance)
 	}
 
@@ -348,7 +347,7 @@ func TestMineStopsWhenBlockGasIsFull(t *testing.T) {
 	}
 	// 单价 1，实际烧掉 42000，费用全部进本块 coinbase。
 	paid, ok := c.Account(coin)
-	if !ok || paid.Balance != 42000 {
+	if !ok || paid.Balance != U256(42000) {
 		t.Fatalf("coinbase = %+v ok=%v", paid, ok)
 	}
 }
@@ -726,14 +725,14 @@ func TestAppendRejectsBadTransactionsRoot(t *testing.T) {
 	}
 }
 
-// 收款方余额已经是 uint64 最大值。再转入 1 会溢出，Apply 返回错误。出块关掉这位，块是空的。
+// 收款方余额已经是 2^256-1。再转入 1 会溢出，Apply 返回错误。出块关掉这位，块是空的。
 // 绕过 AddTx，把只有 1 字节签名的交易直接放进池。出块恢复发送方失败，整次 Mine 返回错误。
 func TestMineSkipsApplyErrorAndBadPendingSignature(t *testing.T) {
 	c := New()
 	var to Address
 	to[19] = 9
 	c.mu.Lock()
-	c.state.SetAccount(Account{Address: to, Balance: math.MaxUint64})
+	c.state.SetAccount(Account{Address: to, Balance: MaxUint256()})
 	c.mu.Unlock()
 	tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
 	if err != nil {
@@ -746,7 +745,7 @@ func TestMineSkipsApplyErrorAndBadPendingSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 收款方再收 1 就会超出 uint64。Apply 失败只关掉这位。这里还没有装上任何一笔，所以块是空的。
+	// 收款方再收 1 就会超出 2^256-1。Apply 失败只关掉这位。这里还没有装上任何一笔，所以块是空的。
 	if len(block.Txs) != 0 {
 		t.Fatalf("overflow tx was mined: %d", len(block.Txs))
 	}

@@ -19,21 +19,26 @@ func TestSigningBytesIncludeChainID(t *testing.T) {
 		t.Fatal(err)
 	}
 	sign := tx.SigningBytes()
-	if len(sign) != 64 {
+	if len(sign) != 88 {
 		t.Fatalf("signing bytes len = %d", len(sign))
+	}
+	var wantValue Uint256
+	binary.BigEndian.PutUint64(wantValue[24:], 10)
+	if !bytes.Equal(sign[20:52], wantValue[:]) {
+		t.Fatalf("value bytes = %x", sign[20:52])
 	}
 	var wantField [8]byte
 	binary.BigEndian.PutUint64(wantField[:], 21000)
-	if !bytes.Equal(sign[36:44], wantField[:]) {
-		t.Fatalf("gas limit bytes = %x", sign[36:44])
+	if !bytes.Equal(sign[60:68], wantField[:]) {
+		t.Fatalf("gas limit bytes = %x", sign[60:68])
 	}
 	binary.BigEndian.PutUint64(wantField[:], 1)
-	if !bytes.Equal(sign[44:52], wantField[:]) {
-		t.Fatalf("gas price bytes = %x", sign[44:52])
+	if !bytes.Equal(sign[68:76], wantField[:]) {
+		t.Fatalf("gas price bytes = %x", sign[68:76])
 	}
 	binary.BigEndian.PutUint64(wantField[:], 6666)
-	if !bytes.Equal(sign[52:60], wantField[:]) {
-		t.Fatalf("chain id bytes = %x", sign[52:60])
+	if !bytes.Equal(sign[76:84], wantField[:]) {
+		t.Fatalf("chain id bytes = %x", sign[76:84])
 	}
 	got, err := tx.Sender()
 	if err != nil {
@@ -66,7 +71,7 @@ func TestCreateOmitsToAndZeroAddressIsACall(t *testing.T) {
 		t.Fatal("zero address was signed as create")
 	}
 	sign := call.SigningBytes()
-	if len(sign) != 64 || !bytes.Equal(sign[:20], make([]byte, 20)) {
+	if len(sign) != 88 || !bytes.Equal(sign[:20], make([]byte, 20)) {
 		t.Fatalf("zero-address signing len = %d prefix = %x", len(sign), sign[:min(20, len(sign))])
 	}
 	create, err := SignCreate(key, 10, 0, 53000, 1, ChainID, nil)
@@ -77,7 +82,7 @@ func TestCreateOmitsToAndZeroAddressIsACall(t *testing.T) {
 		t.Fatal("create flag was not set")
 	}
 	created := create.SigningBytes()
-	if len(created) != 44 {
+	if len(created) != 68 {
 		t.Fatalf("create signing len = %d", len(created))
 	}
 	if bytes.Equal(sign, created) {
@@ -119,8 +124,8 @@ func TestTransactionTrieValueIsRLPList(t *testing.T) {
 func TestTransactionRLPSignatureIs65Bytes(t *testing.T) {
 	var to Address
 	to[19] = 1
-	short := Tx{To: to, Value: 1, Nonce: 2, Sig: []byte{1, 2, 3}}
-	long := Tx{To: to, Value: 1, Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
+	short := Tx{To: to, Value: U256(1), Nonce: 2, Sig: []byte{1, 2, 3}}
+	long := Tx{To: to, Value: U256(1), Nonce: 2, Sig: bytes.Repeat([]byte{9}, 80)}
 	shortSig := make([]byte, 65)
 	copy(shortSig, short.Sig)
 	if !bytes.Equal(short.rlp(), transactionRLP(short, shortSig)) {
@@ -137,7 +142,7 @@ func transactionRLP(tx Tx, sig []byte) []byte {
 		rlpUint(tx.GasPrice),
 		rlpUint(tx.GasLimit),
 		rlpString(tx.To[:]),
-		rlpUint(tx.Value),
+		tx.Value.rlp(),
 		rlpString(tx.Data),
 		rlpUint(tx.ChainID),
 		rlpString(sig),
@@ -155,7 +160,7 @@ func TestPoolRejectsWrongChainID(t *testing.T) {
 	if _, err := tx.Sender(); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewPool().AddTx(tx, 100, 0); !errors.Is(err, ErrWrongChainID) {
+	if err := NewPool().AddTx(tx, U256(100), 0); !errors.Is(err, ErrWrongChainID) {
 		t.Fatalf("pool err = %v", err)
 	}
 	if _, err := Apply(NewState(), tx); !errors.Is(err, ErrWrongChainID) {

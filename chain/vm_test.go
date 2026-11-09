@@ -164,7 +164,7 @@ func runSlot0(t *testing.T, code []byte) (Hash, execKind) {
 	var addr Address
 	addr[19] = 1
 	steps := maxSteps
-	_, _, _, kind := runCode(st, addr, Address{}, 0, nil, code, 100000, 1, &steps)
+	_, _, _, kind := runCode(st, addr, Address{}, U256(0), nil, code, 100000, 1, &steps)
 	return st.GetStorage(addr, Hash{}), kind
 }
 
@@ -455,7 +455,7 @@ func TestWordArithmeticStoresDifference(t *testing.T) {
 	code := []byte{0x60, 0x01, 0x60, 0x03, 0x03, 0x60, 0x00, 0x55, 0x00}
 	steps := maxSteps
 	// 直接跑这段代码，不经过交易。gas 100000，调用深度 1。
-	_, _, _, kind := runCode(st, addr, Address{}, 0, nil, code, 100000, 1, &steps)
+	_, _, _, kind := runCode(st, addr, Address{}, U256(0), nil, code, 100000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("kind = %d", kind)
 	}
@@ -514,7 +514,7 @@ func TestSloadReadsStoredSlot(t *testing.T) {
 	// PUSH1 2 SLOAD ISZERO PUSH1 3 SSTORE：槽 2 没写过，读出 0，ISZERO 的 1 写入槽 3。
 	code := []byte{0x60, 0x00, 0x54, 0x60, 0x01, 0x55, 0x60, 0x02, 0x54, 0x15, 0x60, 0x03, 0x55, 0x00}
 	steps := maxSteps
-	_, _, _, kind := runCode(st, addr, Address{}, 0, nil, code, 100000, 1, &steps)
+	_, _, _, kind := runCode(st, addr, Address{}, U256(0), nil, code, 100000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("kind = %d", kind)
 	}
@@ -649,12 +649,13 @@ func TestRevertDropsValueAndKeepsFee(t *testing.T) {
 		t.Fatalf("nonce = %d", got.Nonce)
 	}
 	// 余额只减去这笔烧掉的 gas，附带的 10 退回发送方。
-	if got.Balance != before.Balance-receipt.GasUsed {
-		t.Fatalf("balance = %d want %d", got.Balance, before.Balance-receipt.GasUsed)
+	want, under := before.Balance.Sub(U256(receipt.GasUsed))
+	if under || got.Balance != want {
+		t.Fatalf("balance = %s want %s", got.Balance, want)
 	}
 	recip, _ := st.GetAccount(addr)
 	// 合约没留下这笔 10，余额仍是 0。
-	if recip.Balance != 0 {
+	if !recip.Balance.IsZero() {
 		t.Fatalf("contract balance = %d", recip.Balance)
 	}
 }

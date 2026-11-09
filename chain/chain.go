@@ -13,11 +13,11 @@ import (
 	"github.com/slmthydesp/minichain/sig"
 )
 
-// Unit 是 1 个币对应的最小单位数量，等于 10^18。余额和转账金额都按最小单位记账。
-const Unit uint64 = 1_000_000_000_000_000_000
+// Unit 是 1 个币对应的最小单位数量，等于 10^18。余额和转账金额都按最小单位记账，宽度是 256 位。
+var Unit = U256(1_000_000_000_000_000_000)
 
 // GenesisBalance 是创世时演示账户的余额，等于 1 个币。
-const GenesisBalance uint64 = Unit
+var GenesisBalance = Unit
 
 // FinalityDepth 是最终性深度。链头高度是 H，并且 H 不小于这个数时，高度 H-FinalityDepth 的块已经最终确定。
 // 链还更短时，最终确定的只有创世块。

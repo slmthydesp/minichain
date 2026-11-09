@@ -34,31 +34,27 @@ func (m *machine) execCall(mode callMode) error {
 	gasReq, okG := m.popUint64()
 	to := addressFromHash(m.pop())
 	value := m.value
-	var okV bool
 	transfer := false
 	switch mode {
 	case modeCall, modeCallCode:
-		value, okV = m.popUint64()
+		value = Uint256(m.pop())
 		transfer = true
-	default:
-		okV = true
-		if mode == modeStatic {
-			value = 0
-		}
+	case modeStatic:
+		value = Uint256{}
 	}
 	inOff, ok1 := m.popUint64()
 	inSize, ok2 := m.popUint64()
 	retOff, ok3 := m.popUint64()
 	retSize, ok4 := m.popUint64()
-	if !okG || !okV || !ok1 || !ok2 || !ok3 || !ok4 {
+	if !okG || !ok1 || !ok2 || !ok3 || !ok4 {
 		return errHalt
 	}
 	// 只读帧里再转出金额，整帧停机，而不是压入 0。
-	if transfer && value > 0 && m.state.readOnly {
+	if transfer && !value.IsZero() && m.state.readOnly {
 		return errHalt
 	}
 	cost := gasCall
-	if transfer && value > 0 {
+	if transfer && !value.IsZero() {
 		cost += gasCallValue
 	}
 	if m.gas < cost {
@@ -96,6 +92,15 @@ func (m *machine) execCall(mode callMode) error {
 		forward = gasReq
 	}
 	m.gas -= forward
+	// 带金额的 CALL 和 CALLCODE 再给子调用 2300。这笔不从本帧扣。
+	// 子调用没用完的部分会退回来，所以本帧的 gas 最多能多出 2300。
+	childGas := forward
+	if transfer && !value.IsZero() {
+		if childGas > ^uint64(0)-gasCallStipend {
+			return errHalt
+		}
+		childGas += gasCallStipend
+	}
 
 	prevOnly := m.state.readOnly
 	if mode == modeStatic {
@@ -104,7 +109,7 @@ func (m *machine) execCall(mode callMode) error {
 	defer func() { m.state.readOnly = prevOnly }()
 
 	snap := m.state.Copy()
-	if transfer && value > 0 {
+	if transfer && !value.IsZero() {
 		if err := m.state.transfer(m.contract, to, value); err != nil {
 			// 转账没做成。转出的 gas 退回。余额溢出则整帧停机，余额不够则压入 0。
 			m.gas += forward
@@ -117,11 +122,11 @@ func (m *machine) execCall(mode callMode) error {
 	}
 	code := m.state.GetCode(codeAt)
 	if len(code) == 0 {
-		m.gas += forward
+		m.gas += childGas
 		m.returnData = nil
 		return m.push(hashFromUint64(1))
 	}
-	ret, logs, left, kind := runCode(m.state, contract, caller, value, input, code, forward, m.depth+1, m.steps)
+	ret, logs, left, kind := runCode(m.state, contract, caller, value, input, code, childGas, m.depth+1, m.steps)
 	m.gas += left
 	if kind != execOK {
 		m.state.restore(snap)
@@ -174,14 +179,14 @@ func (m *machine) opBalance() error {
 			return errHalt
 		}
 		bal, _ := m.state.GetBalanceNonce(addressFromHash(m.pop()))
-		return m.push(hashFromUint64(bal))
+		return m.push(Hash(bal))
 	})
 }
 
 func (m *machine) opSelfBalance() error {
 	return m.charge(gasBase, func() error {
 		bal, _ := m.state.GetBalanceNonce(m.contract)
-		return m.push(hashFromUint64(bal))
+		return m.push(Hash(bal))
 	})
 }
 
@@ -411,14 +416,14 @@ func (m *machine) opCreate(create2 bool) error {
 	if len(m.stack) < need {
 		return errHalt
 	}
-	value, okV := m.popUint64()
+	value := Uint256(m.pop())
 	off, ok1 := m.popUint64()
 	size, ok2 := m.popUint64()
 	var salt Hash
 	if create2 {
 		salt = m.pop()
 	}
-	if !okV || !ok1 || !ok2 {
+	if !ok1 || !ok2 {
 		return errHalt
 	}
 	if size > maxInitCode {
@@ -439,7 +444,7 @@ func (m *machine) opCreate(create2 bool) error {
 		init = append([]byte(nil), m.mem[off:off+size]...)
 	}
 	creator := m.state.GetAccountOrZero(m.contract)
-	if creator.Nonce == ^uint64(0) || creator.Balance < value {
+	if creator.Nonce == ^uint64(0) || creator.Balance.Cmp(value) < 0 {
 		m.returnData = nil
 		return m.push(Hash{})
 	}
@@ -495,7 +500,7 @@ func (m *machine) opCreate(create2 bool) error {
 	return m.push(hashFromAddress(addr))
 }
 
-func (m *machine) runInit(addr Address, value uint64, init []byte, gas uint64) ([]byte, uint64, execKind) {
+func (m *machine) runInit(addr Address, value Uint256, init []byte, gas uint64) ([]byte, uint64, execKind) {
 	if len(init) == 0 {
 		return nil, gas, execOK
 	}
@@ -554,13 +559,13 @@ func (m *machine) opSelfdestruct() error {
 				if err := m.state.transfer(m.contract, to, bal); err != nil {
 					return err
 				}
-			} else if bal > 0 {
+			} else if !bal.IsZero() {
 				acct := m.state.GetAccountOrZero(m.contract)
-				acct.Balance = 0
+				acct.Balance = Uint256{}
 				m.state.SetAccount(acct)
 			}
 			m.state.markDestructed(m.contract)
-		} else if to != m.contract && bal > 0 {
+		} else if to != m.contract && !bal.IsZero() {
 			if err := m.state.transfer(m.contract, to, bal); err != nil {
 				return err
 			}

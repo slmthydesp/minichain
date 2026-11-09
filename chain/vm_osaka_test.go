@@ -118,8 +118,8 @@ func TestOsakaContextOpcodes(t *testing.T) {
 	contract[19] = 1
 	rich[19] = 2
 	coin[19] = 3
-	st.SetAccount(Account{Address: contract, Balance: 9})
-	st.SetAccount(Account{Address: rich, Balance: 40})
+	st.SetAccount(Account{Address: contract, Balance: U256(9)})
+	st.SetAccount(Account{Address: rich, Balance: U256(40)})
 	st.SetCoinbase(coin)
 	st.SetBlock(8, 100)
 	st.beginTx(rich, 7)
@@ -129,62 +129,62 @@ func TestOsakaContextOpcodes(t *testing.T) {
 	balCode := append([]byte{0x73}, rich[:]...)
 	balCode = append(balCode, 0x31, 0x60, 0x00, 0x55, 0x00)
 	steps := maxSteps
-	_, _, _, kind := runCode(st, contract, Address{}, 0, nil, balCode, 100000, 1, &steps)
+	_, _, _, kind := runCode(st, contract, Address{}, U256(0), nil, balCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(40) {
 		t.Fatalf("balance kind=%d got=%x", kind, st.GetStorage(contract, Hash{}))
 	}
 
 	selfCode := []byte{0x47, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, selfCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, selfCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(9) {
 		t.Fatalf("selfbalance got=%x", st.GetStorage(contract, Hash{}))
 	}
 	originCode := []byte{0x32, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, originCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, originCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromAddress(rich) {
 		t.Fatalf("origin got=%x", st.GetStorage(contract, Hash{}))
 	}
 	priceCode := []byte{0x3a, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, priceCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, priceCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(7) {
 		t.Fatalf("gasprice got=%x", st.GetStorage(contract, Hash{}))
 	}
 	coinCode := []byte{0x41, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, coinCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, coinCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromAddress(coin) {
 		t.Fatalf("coinbase got=%x", st.GetStorage(contract, Hash{}))
 	}
 	idCode := []byte{0x46, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, idCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, idCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(ChainID) {
 		t.Fatalf("chainid got=%x", st.GetStorage(contract, Hash{}))
 	}
 	limitCode := []byte{0x45, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, limitCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, limitCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(BlockGasLimit) {
 		t.Fatalf("gaslimit got=%x", st.GetStorage(contract, Hash{}))
 	}
 	hashCode := []byte{0x60, 0x07, 0x40, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, hashCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, hashCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != parent {
 		t.Fatalf("blockhash got=%x", st.GetStorage(contract, Hash{}))
 	}
 	// 当前块和 256 块以前都读不到。
 	missCode := []byte{0x60, 0x08, 0x40, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, missCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, missCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != (Hash{}) {
 		t.Fatalf("current blockhash got=%x", st.GetStorage(contract, Hash{}))
 	}
 	// 没有随机数、base fee、blob。
 	for _, op := range []byte{0x44, 0x48, 0x4a} {
 		zeroCode := []byte{op, 0x60, 0x00, 0x55, 0x00}
-		_, _, _, kind = runCode(st, contract, Address{}, 0, nil, zeroCode, 100000, 1, &steps)
+		_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, zeroCode, 100000, 1, &steps)
 		if kind != execOK || st.GetStorage(contract, Hash{}) != (Hash{}) {
 			t.Fatalf("op %x got=%x", op, st.GetStorage(contract, Hash{}))
 		}
 	}
 	blobCode := []byte{0x60, 0x00, 0x49, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, blobCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, blobCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != (Hash{}) {
 		t.Fatalf("blobhash got=%x", st.GetStorage(contract, Hash{}))
 	}
@@ -197,19 +197,19 @@ func TestOsakaContextOpcodes(t *testing.T) {
 	st.SetCode(rich, []byte{0x00})
 	hashMissing := append([]byte{0x73}, missing[:]...)
 	hashMissing = append(hashMissing, 0x3f, 0x60, 0x00, 0x55, 0x00)
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, hashMissing, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, hashMissing, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != (Hash{}) {
 		t.Fatalf("missing hash got=%x", st.GetStorage(contract, Hash{}))
 	}
 	hashEOA := append([]byte{0x73}, eoa[:]...)
 	hashEOA = append(hashEOA, 0x3f, 0x60, 0x00, 0x55, 0x00)
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, hashEOA, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, hashEOA, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != keccak(nil) {
 		t.Fatalf("empty hash got=%x", st.GetStorage(contract, Hash{}))
 	}
 	sizeCode := append([]byte{0x73}, rich[:]...)
 	sizeCode = append(sizeCode, 0x3b, 0x60, 0x00, 0x55, 0x00)
-	_, _, _, kind = runCode(st, contract, Address{}, 0, nil, sizeCode, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, contract, Address{}, U256(0), nil, sizeCode, 100000, 1, &steps)
 	if kind != execOK || st.GetStorage(contract, Hash{}) != hashFromUint64(1) {
 		t.Fatalf("extcodesize got=%x", st.GetStorage(contract, Hash{}))
 	}
@@ -225,11 +225,11 @@ func TestOsakaCreateDelegateAndStatic(t *testing.T) {
 	st := NewState()
 	var factory Address
 	factory[19] = 1
-	st.SetAccount(Account{Address: factory, Balance: 100})
+	st.SetAccount(Account{Address: factory, Balance: U256(100)})
 	// 空初始代码的 CREATE。地址由创建前的 nonce 0 算出。
 	createCode := []byte{0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0xf0, 0x60, 0x00, 0x55, 0x00}
 	steps := maxSteps
-	_, _, _, kind := runCode(st, factory, Address{}, 0, nil, createCode, 200000, 1, &steps)
+	_, _, _, kind := runCode(st, factory, Address{}, U256(0), nil, createCode, 200000, 1, &steps)
 	want := CreateAddress(factory, 0)
 	if kind != execOK || st.GetStorage(factory, Hash{}) != hashFromAddress(want) {
 		t.Fatalf("create kind=%d got=%x want=%x", kind, st.GetStorage(factory, Hash{}), hashFromAddress(want))
@@ -244,7 +244,7 @@ func TestOsakaCreateDelegateAndStatic(t *testing.T) {
 	}
 
 	create2 := []byte{0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0xf5, 0x60, 0x00, 0x55, 0x00}
-	_, _, _, kind = runCode(st, factory, Address{}, 0, nil, create2, 200000, 1, &steps)
+	_, _, _, kind = runCode(st, factory, Address{}, U256(0), nil, create2, 200000, 1, &steps)
 	want2 := CreateAddress2(factory, Hash{}, nil)
 	if kind != execOK || st.GetStorage(factory, Hash{}) != hashFromAddress(want2) {
 		t.Fatalf("create2 got=%x want=%x", st.GetStorage(factory, Hash{}), hashFromAddress(want2))
@@ -261,7 +261,7 @@ func TestOsakaCreateDelegateAndStatic(t *testing.T) {
 	bad[3] = byte(len(bad))
 	bad = append(bad, badInit...)
 	_, nonceBefore := st.GetBalanceNonce(factory)
-	_, _, _, kind = runCode(st, factory, Address{}, 0, nil, bad, 200000, 1, &steps)
+	_, _, _, kind = runCode(st, factory, Address{}, U256(0), nil, bad, 200000, 1, &steps)
 	_, nonceAfter := st.GetBalanceNonce(factory)
 	rejected := CreateAddress(factory, nonceBefore)
 	if _, ok := st.GetAccount(rejected); ok || len(st.GetCode(rejected)) != 0 || kind != execOK || nonceAfter != nonceBefore+1 {
@@ -277,7 +277,7 @@ func TestOsakaCreateDelegateAndStatic(t *testing.T) {
 	delegate := []byte{0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x73}
 	delegate = append(delegate, callee[:]...)
 	delegate = append(delegate, 0x61, 0x4e, 0x20, 0xf4, 0x00)
-	_, _, _, kind = runCode(st, caller, factory, 3, nil, delegate, 200000, 1, &steps)
+	_, _, _, kind = runCode(st, caller, factory, U256(3), nil, delegate, 200000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("delegate kind=%d", kind)
 	}
@@ -295,7 +295,7 @@ func TestOsakaCreateDelegateAndStatic(t *testing.T) {
 	static := []byte{0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x73}
 	static = append(static, callee[:]...)
 	static = append(static, 0x61, 0x4e, 0x20, 0xfa, 0x60, 0x03, 0x55, 0x60, 0x09, 0x60, 0x02, 0x55, 0x00)
-	_, _, _, kind = runCode(st, caller, factory, 0, nil, static, 200000, 1, &steps)
+	_, _, _, kind = runCode(st, caller, factory, U256(0), nil, static, 200000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("static kind=%d", kind)
 	}
@@ -312,14 +312,14 @@ func TestCallCodeUsesOwnStorageAndTransfers(t *testing.T) {
 	var caller, callee Address
 	caller[19] = 1
 	callee[19] = 2
-	st.SetAccount(Account{Address: caller, Balance: 50})
+	st.SetAccount(Account{Address: caller, Balance: U256(50)})
 	// 对方代码读 CALLVALUE 写进槽 0。CALLCODE 下这个槽属于调用方，金额转到对方。
 	st.SetCode(callee, []byte{0x34, 0x60, 0x00, 0x55, 0x00})
 	code := []byte{0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x05, 0x73}
 	code = append(code, callee[:]...)
 	code = append(code, 0x61, 0x4e, 0x20, 0xf2, 0x00)
 	steps := maxSteps
-	_, _, _, kind := runCode(st, caller, Address{}, 0, nil, code, 200000, 1, &steps)
+	_, _, _, kind := runCode(st, caller, Address{}, U256(0), nil, code, 200000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("kind=%d", kind)
 	}
@@ -331,7 +331,7 @@ func TestCallCodeUsesOwnStorageAndTransfers(t *testing.T) {
 	}
 	callerBal, _ := st.GetBalanceNonce(caller)
 	calleeBal, _ := st.GetBalanceNonce(callee)
-	if callerBal != 45 || calleeBal != 5 {
+	if callerBal != U256(45) || calleeBal != U256(5) {
 		t.Fatalf("balances caller=%d callee=%d", callerBal, calleeBal)
 	}
 }
@@ -341,7 +341,7 @@ func TestOsakaTransientReturnAndSelfdestruct(t *testing.T) {
 	var caller, callee Address
 	caller[19] = 1
 	callee[19] = 2
-	st.SetAccount(Account{Address: caller, Balance: 50})
+	st.SetAccount(Account{Address: caller, Balance: U256(50)})
 	// 内层把瞬时槽写成 9 再回退。回退数据是 1 字节。
 	st.SetCode(callee, []byte{
 		0x60, 0x09, 0x60, 0x00, 0x5d,
@@ -353,7 +353,7 @@ func TestOsakaTransientReturnAndSelfdestruct(t *testing.T) {
 	code = append(code, callee[:]...)
 	code = append(code, 0x61, 0x4e, 0x20, 0xf1, 0x50, 0x60, 0x00, 0x5c, 0x60, 0x00, 0x55, 0x3d, 0x60, 0x01, 0x55, 0x00)
 	steps := maxSteps
-	_, _, _, kind := runCode(st, caller, Address{}, 0, nil, code, 200000, 1, &steps)
+	_, _, _, kind := runCode(st, caller, Address{}, U256(0), nil, code, 200000, 1, &steps)
 	if kind != execOK {
 		t.Fatalf("kind=%d", kind)
 	}
@@ -365,7 +365,7 @@ func TestOsakaTransientReturnAndSelfdestruct(t *testing.T) {
 	}
 
 	// EOF 的 RJUMP 不是 Osaka 传统执行的操作码。
-	_, _, _, kind = runCode(st, caller, Address{}, 0, nil, []byte{0xe0}, 100000, 1, &steps)
+	_, _, _, kind = runCode(st, caller, Address{}, U256(0), nil, []byte{0xe0}, 100000, 1, &steps)
 	if kind != execHalt {
 		t.Fatalf("eof kind=%d", kind)
 	}
@@ -393,7 +393,7 @@ func TestOsakaTransientReturnAndSelfdestruct(t *testing.T) {
 		t.Fatal("code left behind")
 	}
 	got, _ := txSt.GetBalanceNonce(beneficiary)
-	if got != 5 {
+	if got != U256(5) {
 		t.Fatalf("beneficiary balance = %d", got)
 	}
 
@@ -421,7 +421,7 @@ func TestOsakaTransientReturnAndSelfdestruct(t *testing.T) {
 		t.Fatal("existing contract code was deleted")
 	}
 	bal, _ := txSt.GetBalanceNonce(beneficiary)
-	if bal != 9 {
+	if bal != U256(9) {
 		t.Fatalf("beneficiary after existing destruct = %d", bal)
 	}
 }

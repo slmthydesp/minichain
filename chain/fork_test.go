@@ -115,7 +115,7 @@ func TestReorgRestoresAbandonedTransfer(t *testing.T) {
 	if len(obs.Pool().PendingTxs()) != 0 {
 		t.Fatal("included transaction still pending")
 	}
-	if acct, _ := obs.Account(to); acct.Balance != 10 {
+	if acct, _ := obs.Account(to); acct.Balance != U256(10) {
 		t.Fatalf("balance = %d", acct.Balance)
 	}
 	// 长链更高。第一块同高，先比哈希；第二块高度更大，链头换成它。
@@ -133,7 +133,7 @@ func TestReorgRestoresAbandonedTransfer(t *testing.T) {
 		t.Fatalf("pending after reorg = %d", len(obs.Pool().PendingTxs()))
 	}
 	// 链头状态换成空块那条，收款方在规范链上没有入账。
-	if acct, _ := obs.Account(to); acct.Balance != 0 {
+	if acct, _ := obs.Account(to); acct.Balance != U256(0) {
 		t.Fatalf("balance after reorg = %d", acct.Balance)
 	}
 	// 被放弃的短链块仍保存在 blocks 里，只是不再当链头。
@@ -203,10 +203,10 @@ func TestReorgDoesNotRestoreNonceSpentOnWinner(t *testing.T) {
 		t.Fatal("nonce spent on the winning chain returned to the pool")
 	}
 	// 规范链上入账的是 txB 的收款方。toA 在当前链头看不到这笔。
-	if acct, _ := obs.Account(toB); acct.Balance != 2 {
+	if acct, _ := obs.Account(toB); acct.Balance != U256(2) {
 		t.Fatalf("winner recipient = %d", acct.Balance)
 	}
-	if acct, _ := obs.Account(toA); acct.Balance == 1 {
+	if acct, _ := obs.Account(toA); acct.Balance == U256(1) {
 		t.Fatalf("loser recipient = %d", acct.Balance)
 	}
 }

@@ -144,7 +144,7 @@ func (s *State) SetAccount(a Account) {
 }
 
 // GetBalanceNonce 返回链上的余额和 nonce。账户不存在时两者都是 0，不因此建立账户。
-func (s *State) GetBalanceNonce(a Address) (uint64, uint64) {
+func (s *State) GetBalanceNonce(a Address) (Uint256, uint64) {
 	acct := s.GetAccountOrZero(a)
 	return acct.Balance, acct.Nonce
 }
@@ -192,20 +192,22 @@ func (s *State) SetStorage(a Address, key, val Hash) {
 }
 
 // transfer 把 value 从 from 转到 to。发给自己时余额不变。余额不够或收款方溢出时状态不动。
-func (s *State) transfer(from, to Address, value uint64) error {
-	if value == 0 || from == to {
+func (s *State) transfer(from, to Address, value Uint256) error {
+	if value.IsZero() || from == to {
 		return nil
 	}
 	src := s.GetAccountOrZero(from)
-	if src.Balance < value {
+	if src.Balance.Cmp(value) < 0 {
 		return ErrInsufficientBalance
 	}
 	dst := s.GetAccountOrZero(to)
-	if dst.Balance > ^uint64(0)-value {
+	sum, overflow := dst.Balance.Add(value)
+	if overflow {
 		return ErrBalanceOverflow
 	}
-	src.Balance -= value
-	dst.Balance += value
+	next, _ := src.Balance.Sub(value)
+	src.Balance = next
+	dst.Balance = sum
 	s.SetAccount(src)
 	s.SetAccount(dst)
 	return nil
@@ -236,7 +238,7 @@ func StateRoot(s *State) Hash {
 		code := codeHash(s.code[addr])
 		vals = append(vals, rlpList(
 			rlpUint(acct.Nonce),
-			rlpUint(acct.Balance),
+			acct.Balance.rlp(),
 			rlpString(storage[:]),
 			rlpString(code[:]),
 		))
@@ -331,7 +333,7 @@ func (s *State) finishSelfDestruct() {
 		if !ok {
 			continue
 		}
-		if acct.Balance == 0 {
+		if acct.Balance.IsZero() {
 			s.DeleteAccount(addr)
 			continue
 		}

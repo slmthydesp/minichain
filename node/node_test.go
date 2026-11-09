@@ -316,8 +316,9 @@ func TestAccountReportsBalanceAndNonce(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	demo := "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+	genesis, _ := chain.GenesisBalance.Uint64()
 	got := getAccount(t, srv.URL, demo)
-	if got.Address != demo || got.Balance != chain.GenesisBalance || got.Nonce != 0 {
+	if got.Address != demo || got.Balance != genesis || got.Nonce != 0 {
 		t.Fatalf("genesis account = %+v", got)
 	}
 
@@ -348,7 +349,7 @@ func TestAccountReportsBalanceAndNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender := getAccount(t, srv.URL, "0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266")
-	if sender.Address != demo || sender.Balance != chain.GenesisBalance-20-21000 || sender.Nonce != 1 || sender.NextNonce != 1 {
+	if sender.Address != demo || sender.Balance != genesis-20-21000 || sender.Nonce != 1 || sender.NextNonce != 1 {
 		t.Fatalf("sender = %+v", sender)
 	}
 	recipient := getAccount(t, srv.URL, "0x0000000000000000000000000000000000000001")

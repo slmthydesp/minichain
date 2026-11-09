@@ -42,7 +42,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	badSig := good.Clone()
 	badSig.Sig[0] = 0
 	pool := NewPool()
-	if err := pool.AddTx(badSig, 100000, 0); !errors.Is(err, ErrBadSignature) {
+	if err := pool.AddTx(badSig, U256(100000), 0); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("bad signature err = %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AddTx(low, 100000, 1); !errors.Is(err, ErrNonceTooLow) {
+	if err := pool.AddTx(low, U256(100000), 1); !errors.Is(err, ErrNonceTooLow) {
 		t.Fatalf("low nonce err = %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AddTx(poor, 40, 1); !errors.Is(err, ErrInsufficientBalance) {
+	if err := pool.AddTx(poor, U256(40), 1); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("balance err = %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestPoolRejectsBadSignatureNonceAndBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AddTx(fee, 21009, 1); !errors.Is(err, ErrInsufficientBalance) {
+	if err := pool.AddTx(fee, U256(21009), 1); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("fee err = %v", err)
 	}
 }
@@ -85,22 +85,21 @@ func TestPoolRejectsFeeOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewPool().AddTx(product, ^uint64(0), 0); !errors.Is(err, ErrBalanceOverflow) {
+	if err := NewPool().AddTx(product, U256(^uint64(0)), 0); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("product err = %v", err)
 	}
-	// gas 预留刚好算得出来。value 再加 1 就溢出。
-	price := ^uint64(0) / IntrinsicGas
-	reserved := IntrinsicGas * price
-	sum, err := Sign(key, to, ^uint64(0)-reserved+1, 0, IntrinsicGas, price, ChainID)
+	// 金额已经是 2^256-1。再加 gas 费用就超出 256 位。
+	huge, err := SignAmount(key, to, MaxUint256(), 0, IntrinsicGas, 1, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := NewPool().AddTx(sum, ^uint64(0), 0); !errors.Is(err, ErrBalanceOverflow) {
+	if err := NewPool().AddTx(huge, MaxUint256(), 0); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("sum err = %v", err)
 	}
 	// 同一笔交给 Apply，也是余额溢出，不是进了池才能执行。
-	st, _ := funded(t, ^uint64(0), 0)
-	if _, err := Apply(st, sum); !errors.Is(err, ErrBalanceOverflow) {
+	st, from := funded(t, 0, 0)
+	st.SetAccount(Account{Address: from, Balance: MaxUint256()})
+	if _, err := Apply(st, huge); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("apply err = %v", err)
 	}
 }
@@ -126,12 +125,12 @@ func TestPoolOrdersBySenderThenNonce(t *testing.T) {
 	// 放入顺序故意打乱：nonce 1、另一个发送方、再 nonce 0。
 	pool := NewPool()
 	for _, tx := range []Tx{demo, other, demoFirst} {
-		if err := pool.AddTx(tx, 100000, 0); err != nil {
+		if err := pool.AddTx(tx, U256(100000), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// 同一笔 nonce 0、同一单价再放一次，不能替换。
-	if err := pool.AddTx(demoFirst, 100000, 0); !errors.Is(err, ErrReplacementUnderpriced) {
+	if err := pool.AddTx(demoFirst, U256(100000), 0); !errors.Is(err, ErrReplacementUnderpriced) {
 		t.Fatalf("replacement err = %v", err)
 	}
 	// 取出来必须先按地址，同一地址再按 nonce 从小到大。
@@ -185,11 +184,11 @@ func TestPoolReplacesUnderNonceWhenGasPriceIsHigher(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := NewPool()
-	if err := pool.AddTx(cheap, 100000, 0); err != nil {
+	if err := pool.AddTx(cheap, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	// 单价 2 换掉单价 1。池里只剩这一笔。
-	if err := pool.AddTx(pricey, 100000, 0); err != nil {
+	if err := pool.AddTx(pricey, U256(100000), 0); err != nil {
 		t.Fatalf("replace err = %v", err)
 	}
 	got := pool.PendingTxs()
@@ -197,7 +196,7 @@ func TestPoolReplacesUnderNonceWhenGasPriceIsHigher(t *testing.T) {
 		t.Fatalf("pending = %+v", got)
 	}
 	// 单价更低的换不回来。
-	if err := pool.AddTx(cheap, 100000, 0); !errors.Is(err, ErrReplacementUnderpriced) {
+	if err := pool.AddTx(cheap, U256(100000), 0); !errors.Is(err, ErrReplacementUnderpriced) {
 		t.Fatalf("underpriced err = %v", err)
 	}
 	got = pool.PendingTxs()
@@ -219,7 +218,7 @@ func TestPoolCopiesSignatures(t *testing.T) {
 	data := tx.Data
 	tx.Sig = caller
 	pool := NewPool()
-	if err := pool.AddTx(tx, 100000, 0); err != nil {
+	if err := pool.AddTx(tx, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	// 进池之后改调用方自己的切片。池里应是进池时的副本。
@@ -251,7 +250,7 @@ func TestDropClearsDiscardedSlots(t *testing.T) {
 	}
 	pool := NewPool()
 	for _, tx := range []Tx{first, second} {
-		if err := pool.AddTx(tx, 100000, 0); err != nil {
+		if err := pool.AddTx(tx, U256(100000), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -288,11 +287,11 @@ func TestPoolReservesBalanceForOtherPendingTxs(t *testing.T) {
 	// 这个例子把余额钉在 1000000，用来卡住两笔预留。创世余额是 1 个币，放得下这两笔。
 	const balance uint64 = 1000000
 	pool := NewPool()
-	if err := pool.AddTx(first, balance, 0); err != nil {
+	if err := pool.AddTx(first, U256(balance), 0); err != nil {
 		t.Fatal(err)
 	}
 	// nonce 0 已经占满余额。连续的 nonce 1 再要同样一笔，进不去。
-	if err := pool.AddTx(second, balance, 0); !errors.Is(err, ErrInsufficientBalance) {
+	if err := pool.AddTx(second, U256(balance), 0); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("second err = %v", err)
 	}
 	if len(pool.PendingTxs()) != 1 {
@@ -308,15 +307,15 @@ func TestPoolReservesBalanceForOtherPendingTxs(t *testing.T) {
 	}
 	// 各转 1 的两笔连续交易，预留得下。
 	affordable := NewPool()
-	if err := affordable.AddTx(one, balance, 0); err != nil {
+	if err := affordable.AddTx(one, U256(balance), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := affordable.AddTx(two, balance, 0); err != nil {
+	if err := affordable.AddTx(two, U256(balance), 0); err != nil {
 		t.Fatal(err)
 	}
 	// 两笔都在池里，按 nonce 0、1 排列，金额都是 1。
 	pending := affordable.PendingTxs()
-	if len(pending) != 2 || pending[0].Nonce != 0 || pending[1].Nonce != 1 || pending[0].Value != 1 || pending[1].Value != 1 {
+	if len(pending) != 2 || pending[0].Nonce != 0 || pending[1].Nonce != 1 || pending[0].Value != U256(1) || pending[1].Value != U256(1) {
 		t.Fatalf("pending = %+v", pending)
 	}
 	if !bytes.Equal(pending[0].Sig, one.Sig) || !bytes.Equal(pending[1].Sig, two.Sig) {
@@ -348,21 +347,21 @@ func TestPendingNonceStopsAtGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 先放 nonce 2。前面有空号，可执行号码不往前推。
-	if err := pool.AddTx(future, 100000, 0); err != nil {
+	if err := pool.AddTx(future, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := pool.pendingNonce[sender]; ok || pool.NextNonce(sender, 0) != 0 {
 		t.Fatalf("gap advanced pending nonce to %d", pool.pendingNonce[sender])
 	}
 	// 补上 nonce 0。下一笔是 1，还没连上已经在池里的 2。
-	if err := pool.AddTx(first, 100000, 0); err != nil {
+	if err := pool.AddTx(first, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	if pool.pendingNonce[sender] != 1 || pool.NextNonce(sender, 0) != 1 {
 		t.Fatalf("pending nonce = %d", pool.pendingNonce[sender])
 	}
 	// 再补 nonce 1。连续段穿过 nonce 2，下一笔变成 3。
-	if err := pool.AddTx(second, 100000, 0); err != nil {
+	if err := pool.AddTx(second, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	if pool.pendingNonce[sender] != 3 || pool.NextNonce(sender, 0) != 3 {
@@ -397,7 +396,7 @@ func TestPoolDoesNotReserveBalanceAcrossNonceGap(t *testing.T) {
 	// 0、2、3 中间缺 1。空号后面的不并进连续段的预留，三笔都进得去。
 	pool := NewPool()
 	for _, tx := range []Tx{first, gap, further} {
-		if err := pool.AddTx(tx, balance, 0); err != nil {
+		if err := pool.AddTx(tx, U256(balance), 0); err != nil {
 			t.Fatalf("nonce %d err = %v", tx.Nonce, err)
 		}
 	}
@@ -428,14 +427,14 @@ func TestPoolReplacementMustStillFitWithSiblings(t *testing.T) {
 	// 替换后的预留加上同账户另一笔，会超过这个 1000000。创世余额放得下。
 	const balance uint64 = 1000000
 	pool := NewPool()
-	if err := pool.AddTx(cheap, balance, 0); err != nil {
+	if err := pool.AddTx(cheap, U256(balance), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AddTx(sibling, balance, 0); err != nil {
+	if err := pool.AddTx(sibling, U256(balance), 0); err != nil {
 		t.Fatal(err)
 	}
 	// 替换 nonce 0 之后，新预留加上 nonce 1 超过余额。原来的两笔留着。
-	if err := pool.AddTx(tooBig, balance, 0); !errors.Is(err, ErrInsufficientBalance) {
+	if err := pool.AddTx(tooBig, U256(balance), 0); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("replacement err = %v", err)
 	}
 	pending := pool.PendingTxs()
@@ -465,7 +464,7 @@ func TestPoolFilledAndMaxNonce(t *testing.T) {
 	if !pool.filled(from, 3, 3) {
 		t.Fatal("empty range")
 	}
-	if err := pool.AddTx(sender, 100000, 0); err != nil {
+	if err := pool.AddTx(sender, U256(100000), 0); err != nil {
 		t.Fatal(err)
 	}
 	// 记录写成 4，池里却只有 nonce 0。中间缺号，不能当成已经填满。
@@ -484,7 +483,7 @@ func TestPoolFilledAndMaxNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	maxPool := NewPool()
-	if err := maxPool.AddTx(maxTx, 100000, math.MaxUint64); err != nil {
+	if err := maxPool.AddTx(maxTx, U256(100000), math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
 	if maxPool.NextNonce(from, math.MaxUint64) != math.MaxUint64 {
@@ -492,28 +491,30 @@ func TestPoolFilledAndMaxNonce(t *testing.T) {
 	}
 }
 
-// 两笔金额都是 MaxUint64/2+2，单价是 0，费用就是金额。第一笔进池，和第二笔相加超出 uint64。
-// nonce 0 转 10，nonce 2 转 MaxUint64-5，中间缺 1。空号后面这笔仍加在连续段后面，10 再加上它超出。
+// 两笔金额都是 2^255，单价是 0，费用就是金额。第一笔进池，和第二笔相加超出 2^256-1。
+// nonce 0 转 10，nonce 2 转 2^256-10，中间缺 1。空号后面这笔仍加在连续段后面，10 再加上它超出。
 // 绕过检查直接放入 gasLimit 最大、单价 2 的交易。费用乘积已经超出，再进下一笔时累加到它就拒绝。
 // 池里先放着 nonce 最大值。再放入前一号时，这个号码是空的，连续段在这里停下，nonce 不会加过最大值绕回 0。
 func TestPoolBalanceFitsOverflow(t *testing.T) {
 	key := demoKey(t)
 	var to Address
 	to[19] = 2
-	first, err := Sign(key, to, math.MaxUint64/2+2, 0, 21000, 0, ChainID)
+	var half Uint256
+	half[0] = 0x80
+	first, err := SignAmount(key, to, half, 0, 21000, 0, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Sign(key, to, math.MaxUint64/2+2, 1, 21000, 0, ChainID)
+	second, err := SignAmount(key, to, half, 1, 21000, 0, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 第一笔进得去。再加上同样大的 nonce 1，两笔金额之和超出 uint64。
+	// 第一笔进得去。再加上同样大的 nonce 1，两笔金额之和超出 2^256-1。
 	pool := NewPool()
-	if err := pool.AddTx(first, math.MaxUint64, 0); err != nil {
+	if err := pool.AddTx(first, MaxUint256(), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.AddTx(second, math.MaxUint64, 0); !errors.Is(err, ErrBalanceOverflow) {
+	if err := pool.AddTx(second, MaxUint256(), 0); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("sum err = %v", err)
 	}
 
@@ -521,16 +522,16 @@ func TestPoolBalanceFitsOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	future, err := Sign(key, to, math.MaxUint64-5, 2, 21000, 0, ChainID)
+	future, err := SignAmount(key, to, maxUint256Minus(9), 2, 21000, 0, ChainID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 连续段只有 nonce 0 的 10。nonce 2 落在空号后面，仍要加到这段后面，10 加 MaxUint64-5 超出。
+	// 连续段只有 nonce 0 的 10。nonce 2 落在空号后面，仍要加到这段后面，加起来超出 2^256-1。
 	gapped := NewPool()
-	if err := gapped.AddTx(small, math.MaxUint64, 0); err != nil {
+	if err := gapped.AddTx(small, MaxUint256(), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := gapped.AddTx(future, math.MaxUint64, 0); !errors.Is(err, ErrBalanceOverflow) {
+	if err := gapped.AddTx(future, MaxUint256(), 0); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("gap sum err = %v", err)
 	}
 
@@ -548,7 +549,7 @@ func TestPoolBalanceFitsOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stored.AddTx(next, math.MaxUint64, 0); !errors.Is(err, ErrBalanceOverflow) {
+	if err := stored.AddTx(next, U256(math.MaxUint64), 0); !errors.Is(err, ErrBalanceOverflow) {
 		t.Fatalf("stored overflow err = %v", err)
 	}
 
@@ -563,7 +564,7 @@ func TestPoolBalanceFitsOverflow(t *testing.T) {
 	// 最大值已经在池里。前一号是空的，从这里停下，不会把 nonce 加过最大值。金额很小，可以进池。
 	wrap := NewPool()
 	wrap.storeTx(from, maxTx)
-	if err := wrap.AddTx(maxPrev, 100000, math.MaxUint64-1); err != nil {
+	if err := wrap.AddTx(maxPrev, U256(100000), math.MaxUint64-1); err != nil {
 		t.Fatal(err)
 	}
 }

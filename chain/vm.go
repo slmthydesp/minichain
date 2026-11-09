@@ -8,10 +8,8 @@ import (
 
 // 操作码编号、弹出顺序和结果对齐 Osaka 的传统执行，不含 EOF。
 // 对照表：https://www.evm.codes/?fork=osaka
-// 和以太坊仍有这些差别：余额和金额是 uint64；gas 是固定价，不随冷热和硬分叉变化；
-// 内存按字节线性扩张，MSIZE 是当前字节数，不按 32 字节向上取整；
-// 这条链没有 blob、base fee 和 prevrandao，对应操作码读出来是 0；
-// CALL 附带金额时不另给 2300 的 stipend。
+// 和以太坊仍有这些差别：gas 是固定价，不随冷热和硬分叉变化；
+// 这条链没有 blob、base fee 和 prevrandao，对应操作码读出来是 0。
 const (
 	// 0x00 算术。停机、加减乘除、取模、幂和符号扩展。
 	opSTOP       = 0x00
@@ -122,21 +120,23 @@ const (
 	gasKeccak       uint64 = 30   // KECCAK256 的底价
 	gasKeccakWord   uint64 = 6    // KECCAK256 每个 32 字节字
 	gasCall         uint64 = 100  // CALL 本身
-	gasCallValue    uint64 = 9000 // CALL 还附带了金额
+	gasCallValue    uint64 = 9000 // CALL 还附带了金额，从本帧扣除
+	gasCallStipend  uint64 = 2300 // 带金额的 CALL / CALLCODE 额外给子调用，不从本帧扣除
 	gasCreate       uint64 = 32000
 	gasSelfdestruct uint64 = 5000
 	gasLog          uint64 = 375 // 一条日志
 	gasLogTopic     uint64 = 375 // 日志里每个 topic
 	gasLogData      uint64 = 8   // 日志数据的每个字节
-	gasMemory       uint64 = 3   // 内存每多扩一个字节
+	gasMemory       uint64 = 3   // 内存每个 32 字节字的线性单价
+	memoryQuadDiv   uint64 = 512
 
 	// 执行时不能超过的上限。
-	maxCodeSize = 24576           // 部署后的合约代码最多这么多字节
-	maxInitCode = maxCodeSize * 2 // 创建时的初始代码最多这么多字节
-	maxStack    = 1024            // 栈最多这么多项
-	maxMemory   = 65536           // 一次调用的内存最多这么多字节
-	maxDepth    = 1024            // CALL 和 CREATE 最多嵌套这么层
-	maxSteps    = 100000          // 一条指令算一步，防止跳转死循环
+	maxCodeSize   = 24576           // 部署后的合约代码最多这么多字节
+	maxInitCode   = maxCodeSize * 2 // 创建时的初始代码最多这么多字节
+	maxStack      = 1024            // 栈最多这么多项
+	maxMemorySize = 0x1FFFFFFFE0    // 再大的话，字数的平方放不进 uint64
+	maxDepth      = 1024            // CALL 和 CREATE 最多嵌套这么层
+	maxSteps      = 100000          // 一条指令算一步，防止跳转死循环
 )
 
 // execKind 是一帧执行的结果种类。只有成功、回退、停机三种。
@@ -173,14 +173,15 @@ type machine struct {
 	state      *State       // 这一帧正在改的状态。内层 CALL 失败时，调用方换回调用前的快照。
 	contract   Address      // 正在执行的合约。ADDRESS 读它。
 	caller     Address      // 谁发起了这一帧。CALLER 读它。
-	value      uint64       // 这次调用附带的金额。CALLVALUE 读它。
+	value      Uint256      // 这次调用附带的金额。CALLVALUE 读它。
 	input      []byte       // 调用数据。创建合约时是 nil，初始代码放在 code 里。
 	code       []byte       // 本帧要执行的字节码。
 	dests      map[int]bool // 合法 JUMPDEST 的位置。PUSH 立即数里的同名字节不算。
 	pc         int          // 下一条要读的字节。JUMP 会把它改掉。
 	gas        uint64       // 这一帧还剩的 gas。
 	stack      []Hash       // 栈顶是最后一项，每项 32 字节。
-	mem        []byte       // 本帧内存。用到更远处时按字节扩，并收费。
+	mem        []byte       // 本帧内存。用到更远处时按 32 字节对齐扩张。
+	memGas     uint64       // 已经为当前内存付过的 gas。再次扩张只收增量。
 	logs       []Log        // 本帧成功时记下的日志。回退或停机时 runCode 不交出去。
 	ret        []byte       // RETURN 和 REVERT 写入。STOP 不碰它。REVERT 的这段交给调用方做返回数据，不作为成功返回值。
 	returnData []byte       // 最近一次子调用的返回数据。成功和回退都留下，停机清掉。RETURNDATACOPY 读它。
@@ -195,7 +196,7 @@ type machine struct {
 // 日志是这一帧成功时记下的；REVERT 或停机时丢掉，返回 nil。
 // 剩余 gas 是停下来时还剩的；停机（execHalt）时是 0，这一帧剩下的 gas 全部扣掉。
 // 结果种类是 execOK、execRevert 或 execHalt。
-func runCode(st *State, contract, caller Address, value uint64, input, code []byte, gas uint64, depth int, steps *int) ([]byte, []Log, uint64, execKind) {
+func runCode(st *State, contract, caller Address, value Uint256, input, code []byte, gas uint64, depth int, steps *int) ([]byte, []Log, uint64, execKind) {
 	m := &machine{
 		state: st, contract: contract, caller: caller, value: value,
 		input: input, code: code, dests: jumpDests(code),
@@ -322,7 +323,7 @@ func (m *machine) exec(op byte) error {
 	case opCALLER:
 		return m.charge(gasBase, func() error { return m.push(hashFromAddress(m.caller)) })
 	case opCALLVALUE:
-		return m.charge(gasBase, func() error { return m.push(hashFromUint64(m.value)) })
+		return m.charge(gasBase, func() error { return m.push(Hash(m.value)) })
 	case opCALLDATALOAD:
 		return m.charge(gasBase, m.opCallDataLoad)
 	case opCALLDATASIZE:
@@ -692,27 +693,31 @@ func (m *machine) opDelegateCall() error { return m.execCall(modeDelegate) }
 // opStaticCall 只读调用。内层写存储、打日志、创建或带金额调用都会停机，外层仍可继续。
 func (m *machine) opStaticCall() error { return m.execCall(modeStatic) }
 
-// grow 把内存扩到能盖住这段区间。每多一个字节收 gasMemory，上限是 maxMemory。
+// grow 把内存扩到能盖住这段区间。长度向上取整到 32 字节，MSIZE 就是对齐后的字节数。
+// 费用是 words^2/512 + 3*words，只收比上次多出来的部分。长度为 0 不扩张。
 func (m *machine) grow(off, size uint64) error {
-	// 长度为 0 的区间不扩内存，也不收费。
 	if size == 0 {
 		return nil
 	}
-	if off > maxMemory || size > maxMemory-off {
+	// 超过这个长度时，字数的平方放不进 uint64。
+	if off > maxMemorySize || size > maxMemorySize-off {
 		return errHalt
 	}
 	end := off + size
-	// 这段已经在现有内存里，不再收费。
-	if end <= uint64(len(m.mem)) {
+	words := (end + 31) / 32
+	aligned := words * 32
+	if aligned <= uint64(len(m.mem)) {
 		return nil
 	}
-	growBy := end - uint64(len(m.mem))
-	// 每个新字节收 gasMemory。先用除法看 gas 够不够，避免字节数乘单价时溢出。
-	if growBy > m.gas/gasMemory {
+	// 新的总费用。maxMemorySize 保证平方和加法都不会溢出。
+	total := words*gasMemory + (words*words)/memoryQuadDiv
+	fee := total - m.memGas
+	if m.gas < fee {
 		return errHalt
 	}
-	m.gas -= growBy * gasMemory
-	next := make([]byte, end)
+	m.gas -= fee
+	m.memGas = total
+	next := make([]byte, aligned)
 	copy(next, m.mem)
 	m.mem = next
 	return nil

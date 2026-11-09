@@ -23,7 +23,7 @@ func funded(t *testing.T, balance, nonce uint64) (*State, Address) {
 	var addr Address
 	copy(addr[:], raw[:])
 	st := NewState()
-	st.SetAccount(Account{Address: addr, Balance: balance, Nonce: nonce})
+	st.SetAccount(Account{Address: addr, Balance: U256(balance), Nonce: nonce})
 	return st, addr
 }
 
@@ -41,11 +41,11 @@ func TestApplyTransferUpdatesNonceAndBalances(t *testing.T) {
 	}
 	// 发送方扣掉 40 和 21000，nonce 变成 1。收款方只增加 40。
 	got, ok := st.GetAccount(from)
-	if !ok || got.Balance != 100000-40-21000 || got.Nonce != 1 {
+	if !ok || got.Balance != U256(100000-40-21000) || got.Nonce != 1 {
 		t.Fatalf("sender = %+v ok=%v", got, ok)
 	}
 	recip, ok := st.GetAccount(to)
-	if !ok || recip.Balance != 40 || recip.Nonce != 0 {
+	if !ok || recip.Balance != U256(40) || recip.Nonce != 0 {
 		t.Fatalf("recipient = %+v ok=%v", recip, ok)
 	}
 }
@@ -67,11 +67,11 @@ func TestApplyZeroAddressIsTransferNotCreate(t *testing.T) {
 	}
 	// 零地址收到 10，nonce 仍是 0，上面没有代码。
 	recip, ok := st.GetAccount(Address{})
-	if !ok || recip.Balance != 10 || recip.Nonce != 0 || len(st.GetCode(Address{})) != 0 {
+	if !ok || recip.Balance != U256(10) || recip.Nonce != 0 || len(st.GetCode(Address{})) != 0 {
 		t.Fatalf("zero address = %+v ok=%v", recip, ok)
 	}
 	got, _ := st.GetAccount(from)
-	if got.Balance != 100000-10-21000 || got.Nonce != 1 {
+	if got.Balance != U256(100000-10-21000) || got.Nonce != 1 {
 		t.Fatalf("sender = %+v", got)
 	}
 }
@@ -91,11 +91,11 @@ func TestApplySelfTransferKeepsBalance(t *testing.T) {
 	}
 	// 金额扣掉又加回自己。余额只少给 coinbase 的 21000。
 	got, _ := st.GetAccount(from)
-	if got.Balance != 100000-21000 || got.Nonce != 1 {
+	if got.Balance != U256(100000-21000) || got.Nonce != 1 {
 		t.Fatalf("self = %+v", got)
 	}
 	paid, ok := st.GetAccount(coin)
-	if !ok || paid.Balance != 21000 {
+	if !ok || paid.Balance != U256(21000) {
 		t.Fatalf("coinbase = %+v ok=%v", paid, ok)
 	}
 }
@@ -150,8 +150,8 @@ func TestApplyRejectsRecipientOverflow(t *testing.T) {
 	st, from := funded(t, 100000, 0)
 	var to Address
 	to[19] = 4
-	// 收款方再收 2 就会超过 uint64 的上限。
-	st.SetAccount(Account{Address: to, Balance: math.MaxUint64 - 1, Nonce: 0})
+	// 收款方再收 2 就会超过 2^256-1。
+	st.SetAccount(Account{Address: to, Balance: maxUint256Minus(1), Nonce: 0})
 	senderBefore, _ := st.GetAccount(from)
 	tx, err := Sign(demoKey(t), to, 2, 0, 21000, 1, ChainID)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestApplyRejectsRecipientOverflow(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	got, _ := st.GetAccount(to)
-	if got.Balance != math.MaxUint64-1 || got.Nonce != 0 {
+	if got.Balance != maxUint256Minus(1) || got.Nonce != 0 {
 		t.Fatalf("recipient = %+v", got)
 	}
 	senderAfter, _ := st.GetAccount(from)
@@ -176,7 +176,7 @@ func TestApplyRejectsBadSignatureWithoutMutating(t *testing.T) {
 	st, from := funded(t, 10, 0)
 	var other Address
 	other[19] = 8
-	st.SetAccount(Account{Address: other, Balance: 4, Nonce: 1})
+	st.SetAccount(Account{Address: other, Balance: U256(4), Nonce: 1})
 	var to Address
 	to[19] = 3
 	tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
@@ -223,16 +223,16 @@ func TestApplyPaysCoinbase(t *testing.T) {
 		t.Fatalf("receipt = %+v", receipt)
 	}
 	got, ok := st.GetAccount(from)
-	if !ok || got.Balance != 1000000-10-42000 || got.Nonce != 1 {
+	if !ok || got.Balance != U256(1000000-10-42000) || got.Nonce != 1 {
 		t.Fatalf("sender = %+v ok=%v", got, ok)
 	}
 	recip, ok := st.GetAccount(to)
-	if !ok || recip.Balance != 10 || recip.Nonce != 0 {
+	if !ok || recip.Balance != U256(10) || recip.Nonce != 0 {
 		t.Fatalf("recipient = %+v ok=%v", recip, ok)
 	}
 	// 21000 乘单价 2，费用 42000 进 coinbase。
 	miner, ok := st.GetAccount(coin)
-	if !ok || miner.Balance != 42000 || miner.Nonce != 0 {
+	if !ok || miner.Balance != U256(42000) || miner.Nonce != 0 {
 		t.Fatalf("coinbase = %+v ok=%v", miner, ok)
 	}
 
@@ -251,11 +251,11 @@ func TestApplyPaysCoinbase(t *testing.T) {
 		t.Fatalf("wide gas = %d", receipt.GasUsed)
 	}
 	wideSender, _ := wideState.GetAccount(wideFrom)
-	if wideSender.Balance != 1000000-10-42000 {
+	if wideSender.Balance != U256(1000000-10-42000) {
 		t.Fatalf("wide sender balance = %d", wideSender.Balance)
 	}
 	wideCoin, _ := wideState.GetAccount(coin)
-	if wideCoin.Balance != 42000 {
+	if wideCoin.Balance != U256(42000) {
 		t.Fatalf("wide coinbase balance = %d", wideCoin.Balance)
 	}
 
@@ -281,7 +281,7 @@ func TestApplyPaysCoinbase(t *testing.T) {
 		t.Fatal("intrinsic gas created the coinbase")
 	}
 	// 池和 Apply 用同一条起步 gas 规则，这笔也进不了池。
-	if err := NewPool().AddTx(low, 1000000, 0); !errors.Is(err, ErrIntrinsicGas) {
+	if err := NewPool().AddTx(low, U256(1000000), 0); !errors.Is(err, ErrIntrinsicGas) {
 		t.Fatalf("pool err = %v", err)
 	}
 }
@@ -302,11 +302,11 @@ func TestApplyRefundsFeeWhenSenderIsCoinbase(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := st.GetAccount(from)
-	if got.Balance != 100000-10 || got.Nonce != 1 {
+	if got.Balance != U256(100000-10) || got.Nonce != 1 {
 		t.Fatalf("sender coinbase = %+v", got)
 	}
 	recip, ok := st.GetAccount(to)
-	if !ok || recip.Balance != 10 {
+	if !ok || recip.Balance != U256(10) {
 		t.Fatalf("recipient = %+v ok=%v", recip, ok)
 	}
 
@@ -321,7 +321,7 @@ func TestApplyRefundsFeeWhenSenderIsCoinbase(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = self.GetAccount(selfFrom)
-	if got.Balance != 100000 || got.Nonce != 1 {
+	if got.Balance != U256(100000) || got.Nonce != 1 {
 		t.Fatalf("self coinbase = %+v", got)
 	}
 }
@@ -335,7 +335,7 @@ func TestApplyHaltFeeOverflowRestoresSnapshot(t *testing.T) {
 	coin[19] = 4
 	st.SetCoinbase(coin)
 	// coinbase 已经满了。后面停机费用是 gasLimit * 1，加进去会溢出。
-	st.SetAccount(Account{Address: coin, Balance: math.MaxUint64})
+	st.SetAccount(Account{Address: coin, Balance: MaxUint256()})
 	// 创建地址用发送方当前 nonce 0 算：CreateAddress(from, 0)。
 	occupied := CreateAddress(from, 0)
 	// nonce 1 是这里写进去的，不是发送方的 nonce。executeCreate 看到目标账户 nonce > 0 就当已有合约，整笔停机。
@@ -356,7 +356,7 @@ func TestApplyHaltFeeOverflowRestoresSnapshot(t *testing.T) {
 	coinAfter, _ := st.GetAccount(coin)
 	occupiedAfter, _ := st.GetAccount(occupied)
 	// from 余额和 nonce 都回到执行前。coinbase 仍是最大值。占用地址仍是 nonce 1。
-	if senderAfter != senderBefore || coinAfter.Balance != math.MaxUint64 || occupiedAfter.Nonce != 1 || StateRoot(st) != root {
+	if senderAfter != senderBefore || coinAfter.Balance != MaxUint256() || occupiedAfter.Nonce != 1 || StateRoot(st) != root {
 		t.Fatalf("halt fee overflow changed state: sender=%+v coin=%d occupied=%+v", senderAfter, coinAfter.Balance, occupiedAfter)
 	}
 }
@@ -370,8 +370,8 @@ func TestApplyRejectsCoinbaseOverflow(t *testing.T) {
 	to[19] = 9
 	coin[19] = 4
 	st.SetCoinbase(coin)
-	// 转账可以做完。费用是 21000 * 1，coinbase 再收就会超出 uint64。
-	st.SetAccount(Account{Address: coin, Balance: math.MaxUint64, Nonce: 0})
+	// 转账可以做完。费用是 21000 * 1，coinbase 再收就会超出 2^256-1。
+	st.SetAccount(Account{Address: coin, Balance: MaxUint256(), Nonce: 0})
 	senderBefore, _ := st.GetAccount(from)
 	root := StateRoot(st)
 	tx, err := Sign(demoKey(t), to, 1, 0, 21000, 1, ChainID)
@@ -385,7 +385,7 @@ func TestApplyRejectsCoinbaseOverflow(t *testing.T) {
 	senderAfter, _ := st.GetAccount(from)
 	coinAfter, _ := st.GetAccount(coin)
 	// from 的余额和 nonce 都回到执行前。coinbase 仍是最大值，状态根也不变。
-	if senderAfter != senderBefore || coinAfter.Balance != math.MaxUint64 || StateRoot(st) != root {
+	if senderAfter != senderBefore || coinAfter.Balance != MaxUint256() || StateRoot(st) != root {
 		t.Fatal("coinbase overflow changed state")
 	}
 	// 快照换回之后，收款方账户不存在。
@@ -409,7 +409,7 @@ func TestApplyZeroGasPriceSkipsFee(t *testing.T) {
 	}
 	// 余额只少转出的 10，没有 21000 的手续费。nonce 加 1。
 	got, _ := st.GetAccount(from)
-	if got.Balance != 100000-10 || got.Nonce != 1 {
+	if got.Balance != U256(100000-10) || got.Nonce != 1 {
 		t.Fatalf("sender = %+v", got)
 	}
 }
@@ -432,8 +432,8 @@ func TestCreateHaltPaths(t *testing.T) {
 
 	st, from = funded(t, 1000000, 0)
 	addr := CreateAddress(from, 0)
-	// 创建地址上已经有 MaxUint64-1。再转入 2 会超出 uint64，Apply 换回快照。
-	st.SetAccount(Account{Address: addr, Balance: math.MaxUint64 - 1})
+	// 创建地址上已经有 2^256-2。再转入 2 会超出 2^256-1，Apply 换回快照。
+	st.SetAccount(Account{Address: addr, Balance: maxUint256Minus(1)})
 	create, err := SignCreate(key, 2, 0, 90000, 1, ChainID, []byte{0x00})
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +443,7 @@ func TestCreateHaltPaths(t *testing.T) {
 	}
 
 	st, _ = funded(t, 1000000, 0)
-	// PUSH2 0x6001、PUSH1 0、RETURN。要返回 24577 字节，扩内存按每字节 3 gas 收，剩下的不够，停机。
+	// PUSH2 0x6001、PUSH1 0、RETURN。要返回 24577 字节，超过代码长度上限，停机。
 	huge := []byte{0x61, 0x60, 0x01, 0x60, 0x00, 0xf3}
 	create, err = SignCreate(key, 0, 0, 90000, 1, ChainID, huge)
 	if err != nil {

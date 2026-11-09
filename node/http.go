@@ -13,16 +13,16 @@ import (
 	"github.com/slmthydesp/minichain/chain"
 )
 
-// txJSON 是交易的 HTTP 表示。金额、nonce、gas 和 chainId 都是十进制整数，地址和签名是十六进制。
+// txJSON 是交易的 HTTP 表示。金额是十进制整数或十进制字符串，nonce、gas 和 chainId 是十进制整数，地址和签名是十六进制。
 type txJSON struct {
-	To       string `json:"to"`
-	Data     string `json:"data,omitempty"`
-	Value    uint64 `json:"value"`
-	Nonce    uint64 `json:"nonce"`
-	GasLimit uint64 `json:"gasLimit"`
-	GasPrice uint64 `json:"gasPrice"`
-	ChainID  uint64 `json:"chainId"`
-	Sig      string `json:"sig"`
+	To       string        `json:"to"`
+	Data     string        `json:"data,omitempty"`
+	Value    chain.Uint256 `json:"value"`
+	Nonce    uint64        `json:"nonce"`
+	GasLimit uint64        `json:"gasLimit"`
+	GasPrice uint64        `json:"gasPrice"`
+	ChainID  uint64        `json:"chainId"`
+	Sig      string        `json:"sig"`
 }
 
 type logJSON struct {
@@ -60,10 +60,10 @@ type statusJSON struct {
 }
 
 type accountJSON struct {
-	Address   string `json:"address"`
-	Balance   uint64 `json:"balance"`
-	Nonce     uint64 `json:"nonce"`
-	NextNonce uint64 `json:"nextNonce"`
+	Address   string        `json:"address"`
+	Balance   chain.Uint256 `json:"balance"`
+	Nonce     uint64        `json:"nonce"`
+	NextNonce uint64        `json:"nextNonce"`
 }
 
 // Handler 提供提交交易、查询链头、按高度拉块、按哈希取块和查询账户。
@@ -129,7 +129,8 @@ func (n *Node) handleAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad address", http.StatusBadRequest)
 		return
 	}
-	balance, nonce := uint64(0), uint64(0)
+	balance := chain.Uint256{}
+	nonce := uint64(0)
 	if acct, ok := n.chain.Account(addr); ok {
 		balance, nonce = acct.Balance, acct.Nonce
 	}
