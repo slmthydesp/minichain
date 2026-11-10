@@ -2,7 +2,7 @@
 
 日期：2026-11-10
 
-同一条 `hello world` 签名，分别用地址 `0x01` 和合约里的 secp256k1 点运算恢复地址。两边都得到 Anvil 测试账户 `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`。下面的 gas 是函数体内的 `gasUsed`，不含选择器和打包返回值。
+同一条 `hello world` 签名，分别用地址 `0x01` 和合约里的 secp256k1 点运算恢复地址，参考 https://my.feishu.cn/wiki/HRgPw7AgLi6JlPksOkRceh5Sngf#share-QEaUdlFZooLJw5xiUKJchIJtnVd 。两边都得到 Anvil 测试账户 `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`。下面的 gas 是函数体内的 `gasUsed`，不含选择器和打包返回值。
 
 合约在 `contracts/EcrecoverGasCompare.sol`。签名由 `ecrecover.sh` 在本地用 `--no-hash` 签出。
 
