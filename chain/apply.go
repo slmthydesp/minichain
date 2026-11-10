@@ -193,7 +193,7 @@ func receiptFor(s *State, sender Address, tx Tx, status, gasLeft uint64, logs []
 	return Receipt{Status: status, GasUsed: gasUsed, Logs: logs}, nil
 }
 
-// executeTx 先扣掉起步 gas，再把发送方 nonce 加 1，然后转账或创建。没有代码的收款方到此结束。
+// executeTx 先扣掉起步 gas，再把发送方 nonce 加 1，然后转账或创建。没有代码、也不是预编译的收款方到此结束。
 // gas 从 tx.GasLimit 里扣。先扣起步 gas，剩下的才给代码用；普通转账把这份剩余放进 GasLeft。
 func executeTx(s *State, sender Address, tx Tx) (execResult, error) {
 	// 起步 gas 在这里扣。receiptFor 用 gasLimit 减去 GasLeft，得到实际消耗。
@@ -213,6 +213,11 @@ func executeTx(s *State, sender Address, tx Tx) (execResult, error) {
 	// 转账失败是错误，不是回退。调用方换回快照，这笔不入块。
 	if err := s.transfer(sender, tx.To, tx.Value); err != nil {
 		return execResult{}, err
+	}
+	// 0x01 没有账户代码，但调用它要跑 ecrecover。签名不合法仍算成功。
+	// 转给它的 gas 不够 3000 则整笔停机，commitExec 会丢掉刚才的转账。
+	if _, left, kind, hit := runPrecompile(tx.To, tx.Data, gasLeft); hit {
+		return execResult{GasLeft: left, Kind: kind}, nil
 	}
 	// 收款方没有代码就是普通转账，剩下的 gas 原样退回。
 	code := s.GetCode(tx.To)

@@ -23,7 +23,8 @@ func signedBody(t *testing.T, nonce, value uint64) []byte {
 		t.Fatal(err)
 	}
 	var to chain.Address
-	to[19] = 1
+	// 0x01 是 ecrecover。普通转账用 0x02，21000 gas 才够把金额转过去。
+	to[19] = 2
 	tx, err := chain.Sign(key, to, value, nonce, 21000, 1, chain.ChainID)
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +353,7 @@ func TestAccountReportsBalanceAndNonce(t *testing.T) {
 	if sender.Address != demo || sender.Balance != genesis-20-21000 || sender.Nonce != 1 || sender.NextNonce != 1 {
 		t.Fatalf("sender = %+v", sender)
 	}
-	recipient := getAccount(t, srv.URL, "0x0000000000000000000000000000000000000001")
+	recipient := getAccount(t, srv.URL, "0x0000000000000000000000000000000000000002")
 	if recipient.Balance != 20 || recipient.Nonce != 0 {
 		t.Fatalf("recipient = %+v", recipient)
 	}

@@ -10,6 +10,7 @@ import (
 // 对照表：https://www.evm.codes/?fork=osaka
 // 和以太坊仍有这些差别：gas 是固定价，不随冷热和硬分叉变化；
 // 这条链没有 blob、base fee 和 prevrandao，对应操作码读出来是 0。
+// 预编译只有地址 0x01 的 ecrecover。
 const (
 	// 0x00 算术。停机、加减乘除、取模、幂和符号扩展。
 	opSTOP       = 0x00

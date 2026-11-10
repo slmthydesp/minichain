@@ -1,6 +1,6 @@
 # minichain 学习指南
 
-minichain 是一条只存在内存里的链。账户可以只存余额，也可以带上代码和存储。每个进程都出块，也向对等方拉块。同一父块上可以分叉。链头一直是目前最优的那一块，新来的块只和它比：高度更大优先，同高度则哈希更小。换链头时把被放弃的交易退回交易池。链头往前 12 块已经最终确定，只有这一块和它的后代还能参与比较；从更早处分出去的叉仍会保存，但不能再成为链头。两边对规范链算出同一个状态根。它用来建立「账户、签名、chain id、gas、交易池、执行、回执、出块、分叉、同步」这条链路。执行是一台很小的虚拟机：没有代码的收款方仍是转账，有代码就按操作码执行。没有 data 的转账起步 gas 是 21000。
+minichain 是一条只存在内存里的链。账户可以只存余额，也可以带上代码和存储。每个进程都出块，也向对等方拉块。同一父块上可以分叉。链头一直是目前最优的那一块，新来的块只和它比：高度更大优先，同高度则哈希更小。换链头时把被放弃的交易退回交易池。链头往前 12 块已经最终确定，只有这一块和它的后代还能参与比较；从更早处分出去的叉仍会保存，但不能再成为链头。两边对规范链算出同一个状态根。它用来建立「账户、签名、chain id、gas、交易池、执行、回执、出块、分叉、同步」这条链路。执行是一台很小的虚拟机：没有代码的普通收款方仍是转账。地址 `0x01` 上没有代码，调用它会跑 `ecrecover`。有代码的账户按操作码执行。没有 data 的转账起步 gas 是 21000。
 
 建议按下面的顺序读，每一层都先看测试再看实现。
 
@@ -11,7 +11,7 @@ minichain 是一条只存在内存里的链。账户可以只存余额，也可�
 | 3 | `sig/sig.go` | 地址和发送方怎么从私钥推出来 |
 | 4 | `chain/state.go` | 状态根为什么和插入顺序无关 |
 | 5 | `chain/pool.go` | 什么交易能进池，同 nonce 何时被更高单价替换 |
-| 6 | `chain/apply.go`、`chain/vm.go` | 一笔交易怎样转账、跑字节码、收费，失败时为什么还入块 |
+| 6 | `chain/apply.go`、`chain/precompile.go`、`chain/vm.go` | 一笔交易怎样转账、跑预编译或字节码、收费，失败时为什么还入块 |
 | 7 | `chain/chain.go`、`chain/fork_test.go` | `Mine` 怎么挑交易，链头怎么选，回滚怎样退回交易 |
 | 8 | `node/http.go`、`node/node.go`、`cmd/node/main.go`、`cmd/send/main.go` | 交易怎样转给对等方，分叉怎样沿父哈希拉回来 |
 | 9 | `view/`、`cmd/view/main.go` | 只读页面怎样把查询转到节点，它为什么不导入 `chain` |
@@ -233,13 +233,14 @@ sequenceDiagram
 
 ### executeTx
 
-先扣起步 gas，再给发送方 nonce 加 1。创建走 `executeCreate`。调用先转 `value`，收款方没有代码就到此结束，剩下的 gas 原样退回。有代码才把 `tx.Data` 当调用数据交给 `runCode`。转账失败是 error，不是回退。
+先扣起步 gas，再给发送方 nonce 加 1。创建走 `executeCreate`。调用先转 `value`。收款方是 `0x01` 时不看账户代码，把 `tx.Data` 交给 `ecrecover`。剩下的 gas 少于 3000，整笔停机，剩余 gas 记 0；`commitExec` 换回快照，刚才的金额丢掉，nonce 仍加 1，费用按整个 `gasLimit` 收。够 3000 时调用成功，固定再扣 3000。签名不合法只是返回空，金额留下。恢复出的地址不进回执。其它没有代码的收款方到此结束，剩下的 gas 原样退回。有代码才把 `tx.Data` 当调用数据交给 `runCode`。转账失败是 error，不是回退。
 
 ```mermaid
 sequenceDiagram
   participant executeTx
   participant State
   participant executeCreate
+  participant runPrecompile
   participant runCode
 
   executeTx->>executeTx: 计算起步 gas
@@ -254,9 +255,16 @@ sequenceDiagram
       executeTx->>State: transfer value
       alt 余额不够，或收款方入账溢出
         State-->>executeTx: error
-      else 转账成功且没有代码
+      else 收款方是 0x01
+        executeTx->>runPrecompile: input 是 tx.Data
+        alt 剩余 gas 少于 3000
+          Note over executeTx: execHalt，剩余 gas 记 0
+        else 够 3000
+          Note over executeTx: execOK，再扣 3000。签名不合法也成功，返回值不进回执
+        end
+      else 没有代码
         Note over executeTx: execOK，剩下的 gas 原样退回
-      else 转账成功且有代码
+      else 有代码
         executeTx->>runCode: depth 从 1 起，input 是 tx.Data
         runCode-->>executeTx: 日志、剩余 gas、execKind
       end
@@ -322,7 +330,7 @@ sequenceDiagram
   Note over runCode: 代码跑完也是 execOK。没有返回数据，日志留下
 ```
 
-`CALL` 再开一帧。转出的 gas 不超过本帧剩余的 63/64。内层回退或停机只恢复这次调用前的快照，外层栈上得到 0，外层自己仍可以成功。回退会把没花完的 gas 退给外层，停机不退。
+`CALL`、`CALLCODE`、`DELEGATECALL`、`STATICCALL` 打到 `0x01` 时不另开一帧，直接跑 `ecrecover`。gas 够 3000 则栈上压 1，返回 32 字节，地址在末尾 20 字节；签名不合法时返回空，栈上仍是 1。不够 3000 则恢复这次调用前的快照，栈上压 0，转出的 gas 不退，外层继续。带金额的 `CALLCODE` 会把金额转到 `0x01`。其它地址再开一帧。转出的 gas 不超过本帧剩余的 63/64。内层回退或停机只恢复这次调用前的快照，外层栈上得到 0，外层自己仍可以成功。回退会把没花完的 gas 退给外层，停机不退。
 
 ```mermaid
 sequenceDiagram
@@ -332,16 +340,25 @@ sequenceDiagram
 
   外层->>State: Copy 这次调用前的快照
   外层->>State: transfer 这次调用的金额
-  外层->>内层: runCode，depth 加 1
-  内层-->>外层: 返回数据、日志、剩余 gas、execKind
-  alt 内层 execOK
-    Note over 外层: 日志并进外层，返回数据写入内存，栈上压入 1
-  else 内层回退
-    外层->>State: restore 这次调用前的快照
-    Note over 外层: 栈上压入 0，剩余 gas 退回外层
-  else 内层停机
-    外层->>State: restore 这次调用前的快照
-    Note over 外层: 栈上压入 0，转出的 gas 不退
+  alt 目标是 0x01
+    alt gas 够 3000
+      Note over 外层: 栈上压入 1。返回 32 字节，地址在末尾 20 字节。签名不合法则返回空
+    else gas 不够
+      外层->>State: restore 这次调用前的快照
+      Note over 外层: 栈上压入 0，转出的 gas 不退，外层继续
+    end
+  else 其它地址
+    外层->>内层: runCode，depth 加 1
+    内层-->>外层: 返回数据、日志、剩余 gas、execKind
+    alt 内层 execOK
+      Note over 外层: 日志并进外层，返回数据写入内存，栈上压入 1
+    else 内层回退
+      外层->>State: restore 这次调用前的快照
+      Note over 外层: 栈上压入 0，剩余 gas 退回外层
+    else 内层停机
+      外层->>State: restore 这次调用前的快照
+      Note over 外层: 栈上压入 0，转出的 gas 不退
+    end
   end
 ```
 
@@ -476,7 +493,7 @@ go run ./cmd/send \
 - 多个进程出块对应短程分叉。这里用块数做链头选择，同高度比哈希。链头往前 12 块之后不能再被换掉，这是一个很短的最终性，不是信标链投票。选链头不扫描全部历史块：`eligible` 只留最终确定区块及其后代，新块只和当前链头比。最终确定点前移时，更早的分叉离开候选，块本身仍留在内存里。没有节点发现，也没有落盘。链只在进程内存里，退出即丢失。
 - 换链头时退回被放弃分支的交易，对应节点重组时把孤儿块里的交易放回交易池。
 - 签名恢复发送方，和以太坊从签名恢复 `from` 是同一件事。chain id `6666` 写在 `data` 长度之前。恢复标记仍是 27 或 28，没有把 chain id 编进 `v`。
-- 地址 `0x01` 是预编译 `ecrecover`。`CALL` 和交易入口打到这里都由客户端本地恢复地址，不执行账户代码。输入是哈希、`v`、`r`、`s` 各 32 字节。签名不合法时返回空，调用仍成功。每次固定收 3000 gas，不够则这次调用失败。
+- 地址 `0x01` 是预编译 `ecrecover`。`CALL`、`CALLCODE`、`DELEGATECALL`、`STATICCALL` 和交易入口打到这里都由客户端本地恢复地址，不执行账户代码。输入是哈希、`v`、`r`、`s` 各 32 字节。签名不合法时返回空，调用仍成功。每次固定收 3000 gas。交易入口不够 3000 时整笔停机，金额退回，恢复出的地址不进回执。内层调用不够 3000 时只让这次调用失败，外层可以继续。带金额的 `CALLCODE` 会把金额转到 `0x01`。
 - 合约地址是 `Keccak-256(RLP(sender, nonce))` 的后 20 字节，nonce 用创建前的值。初始代码 `RETURN` 出来的字节才是合约代码。成功的日志留在回执里，回退的日志丢掉。
 
 没有节点发现，也没有数据库。同步和出块的外壳可以保持不动。

@@ -120,6 +120,21 @@ func (m *machine) execCall(mode callMode) error {
 			return m.push(Hash{})
 		}
 	}
+	// 预编译按目标地址查，不看这个账户有没有代码。四种调用都走这张表。
+	// 签名不合法时调用仍成功，返回数据是空的。gas 不够则恢复这次调用前的状态，栈上压 0。
+	if ret, left, kind, hit := runPrecompile(to, input, childGas); hit {
+		m.gas += left
+		if kind != execOK {
+			m.state.restore(snap)
+			m.returnData = nil
+			return m.push(Hash{})
+		}
+		m.returnData = append([]byte(nil), ret...)
+		if err := m.writeCallReturn(retOff, retSize, m.returnData); err != nil {
+			return err
+		}
+		return m.push(hashFromUint64(1))
+	}
 	code := m.state.GetCode(codeAt)
 	if len(code) == 0 {
 		m.gas += childGas
