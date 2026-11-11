@@ -51,6 +51,7 @@ func TestEcrecoverAcceptsCompactSignature(t *testing.T) {
 		t.Fatalf("recovered = %x", got)
 	}
 
+	// 参考资料：https://github.com/slmthydesp/minichain/blob/main/docs/two-signatures.md
 	// s 换成 N-s，恢复标记在 27 和 28 之间对调，恢复出的仍是同一地址。
 	n := new(big.Int)
 	n.SetString("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
