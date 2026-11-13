@@ -2,7 +2,9 @@
 
 日期：2026-11-13
 
-一个 goroutine 写下的值，另一个 goroutine 什么时候一定读得到，由 happens-before 规定。两个访问之间有这条关系，读的一方看见写的一方留下的结果。
+测试代码：[happens-before_test.go](./happens-before_test.go)
+
+一个 goroutine 写下的值，另一个 goroutine 什么时候「一定」读得到，由 happens-before 规定。两个访问之间有这条关系，读的一方看见写的一方留下的结果。
 
 两个普通访问碰的是同一块内存，至少一个是写，又排不出这条关系，这就是数据竞争。两边都走 `sync/atomic` 时，访问本身就是同步操作。普通读写和原子操作混在同一块内存上，中间又没有 happens-before，仍然是数据竞争。
 
@@ -11,6 +13,20 @@
 同一条 goroutine 里面，读自己写过的变量按程序顺序就看得见，不另加锁。
 
 下面按 [Go 内存模型](https://go.dev/ref/mem)（2022-06-06 这一版）说明这些边从哪来。每一节的代码就是文末那个测试文件里的同名函数，或者是单独用 `go run -race` 跑过的缺边片段。验证环境是 Go 1.26.1、darwin/amd64。
+
+本文包括：
+
+- **关系怎么串起来**：同一条 goroutine 里的程序顺序，和通道、锁、原子操作跨 goroutine 的同步，合起来再传递。没有这条关系就是数据竞争；不加 `-race` 时，一个机器字以内的读和 `string`、slice 这种多字值分别会怎样。
+- **`go` 语句**：`go` 之前写好的值，新 goroutine 里看得见。函数返回和 `time.Sleep` 不把结果交出去。
+- **通道**：发送、关闭排在对应接收完成之前；无缓冲通道上，接收排在对应发送完成之前；容量为 C 时，第 k 次接收排在第 k+C 次发送完成之前。缓冲还有空位时，发送返回后立刻读对方的变量，可能读到空字符串。
+- **锁**：第 n 次 `Unlock` 排在第 m 次 `Lock` 返回之前。两边各自加锁时，读的一方仍可能先拿到锁，读到零值。
+- **`Once`**：每次直接 `Do`。用普通 `bool` 包住 `Once`、看见 `true` 就跳过 `Do`，是错误写法。
+- **`WaitGroup`**：`Done` 排在被它放行的 `Wait` 返回之前。`Add` 要写在启动 goroutine 之前。
+- **`atomic`**：先把数据写完再 `Store`，`Load` 观察到这次存储后再读。普通 `bool` 忙等、先 `Store` 再写数据、用普通指针发布对象，都接不上。
+- **`Cond`**：`Signal` 或 `Broadcast` 排在被它唤醒的 `Wait` 返回之前。条件要在锁里改，也要在锁里循环检查。
+- **包初始化**：被 import 的包，`init` 全部完成，本包的 `init` 才开始；全部 `init` 完成，才进入 `main`。
+- **写的时候怎么排**：上面这些规则收成六条。
+- **统一代码**：各节能通过 `-race` 的测试合成一个文件，以及怎么跑。
 
 ## 关系怎么串起来
 
@@ -28,7 +44,11 @@
 
 没有数据竞争的程序是 sequentially consistent 的：结果可以用「所有 goroutine 挪到一个处理器上，按某种交错顺序执行」来解释。这件事一般写成 DRF-SC。
 
-有数据竞争时，实现可以报告竞争并停掉进程，加上 `-race` 就是这么做的。继续跑下去的时候，不超过一个机器字的读只能读到某一次真实写过的值，不会读出一个没人写过的数。比一个机器字大的读写可以拆开。`string`、slice、interface、map 在实现里都是多字（指针配长度，或指针配类型）。竞争可以把这些配对撕开，严重时会破坏内存。并发写 map 时，运行时还会直接 panic。
+有数据竞争时，命令加上 `-race` 会打印 `WARNING: DATA RACE`。不加 `-race` 时进程照常跑，这时的规则分两种。
+
+一个机器字以内的读，读到的是某一次真正写进去的值。机器字是 CPU 一次能读写的宽度，64 位机器上是 8 字节，一个 `int`、一个指针都在这个范围内。两个 goroutine 同时把同一个 `int` 写成 `1` 和 `2`，读到的是 `1` 或 `2`。
+
+比一个机器字更大的值，一次读写可以拆成几次。`string` 和 slice 在实现里是「指针 + 长度」，interface 是「类型 + 数据」。竞争可以把两半拆开：指针已经是新的，长度还是旧的。拼出来的值谁都没完整写过，接着用它就可能破坏内存。两个 goroutine 同时写同一个 map，运行时会直接 panic。
 
 看见后写的变量，也不包含已经看见先写的变量。下面这段里，`b` 的写入排在 `a` 后面，但两个 goroutine 之间没有同步。内存模型允许先印出 `2`，再印出 `0`。
 
@@ -42,7 +62,7 @@ print(b)
 print(a)
 ```
 
-这次在 darwin/amd64 上没有把 `2` 然后 `0` 这个结果跑出来。后面每一段缺边程序上的 `DATA RACE` 是用竞态检测器跑出来的。
+「先印出 `2` 再印出 `0`」是内存模型允许的结果。写文档时在这台 darwin/amd64 上没有跑出来：这种 CPU 通常仍按 `a`、`b` 的写入顺序让另一个核看见。竞争还在，只是这次没印成这个样子。后面各节里的 `DATA RACE` 是另一件事，那些程序加了 `-race`，检测器实际打印了报告。
 
 内存模型文档里的实用建议是：程序要是必须靠读完整份模型才能自圆其说，这段代码写得太巧了。改成通道或一把锁。
 
@@ -174,7 +194,7 @@ func TestBufferedCapacity(t *testing.T) {
 }
 ```
 
-缓冲通道上，接收若排在写入后面，发送完成就接不上这次写入。对方写完 `msg` 再接收，主 goroutine 第一次发送就能把值放进缓冲。发送返回只说明缓冲里进了一项。
+缓冲有 1 个空位时，主 goroutine 的发送把值放进缓冲就能返回，不用等对方执行到 `<-c`。返回之后马上读 `msg`，对方的 `msg = "hello"` 可能还没执行，于是读到空字符串 `""`。对方若已经跑完，也可能读到 `"hello"`。两种结果都没有保证。
 
 ```go
 var msg string
@@ -187,7 +207,7 @@ c <- struct{}{}
 println(msg)
 ```
 
-`go run -race` 把主 goroutine 的 `println(msg)` 和另一个 goroutine 的 `msg = "hello"` 配成一对，退出状态 66。
+`go run -race` 把主 goroutine 的 `println(msg)` 和另一个 goroutine 的 `msg = "hello"` 配成一对，退出状态 66。无缓冲通道不会这样：发送要等对方收到，而 `<-c` 写在 `msg = "hello"` 后面，所以上一节的 `TestUnbufferedReceiveBeforeSend` 能读到 `"hello"`。
 
 容量限制（信号量）用的是同一条规则。`make(chan struct{}, 3)` 上，发送表示占一个名额，接收表示还一个名额。缓冲里已经有 3 个值时，下一次发送是第 k+3 次，要等第 k 次接收 happens-before 它完成。
 
@@ -220,6 +240,8 @@ func TestMutex(t *testing.T) {
 
 ## Once
 
+**保证里面的函数，全局只会执行【一次】，哪怕多 goroutine 并发调用** `once.Do(f)`，常用于**单例初始化、一次性加载配置**
+
 `once.Do(f)` 里那一次 `f` 执行完，happens-before 任何一次 `Do` 返回。多个 goroutine 同时调用，`f` 只跑一次，其他调用等它返回。两边都在 `Do` 返回之后读 `msg`。
 
 ```go
@@ -231,7 +253,7 @@ func TestOnce(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			once.Do(func() { msg = "hello" })
+			once.Do(func() { msg += "hello" })
 			if msg != "hello" {
 				t.Errorf("got %q", msg)
 			}
@@ -241,9 +263,25 @@ func TestOnce(t *testing.T) {
 }
 ```
 
-用普通 `bool` 包住 `Once`，想少进一次 `Do`，会把这条边绕开。`Once` 只同步真正走进 `Do` 的调用。两个 goroutine 同时执行下面这段时，检测器报 `done = true` 和 `if !done` 竞争。验证时外面套了 1000 次循环，并用 `WaitGroup` 等两边都跑起来。
+正确写法是每次直接调用 `Do`，外面不要再套普通 `bool`。第一次会执行函数，之后 `Once` 内部已经记过，再调用马上返回，并且返回之后一定能看见函数里写下的值。`TestOnce` 就是这段在两个 goroutine 里同时调用，并且用 `-race` 跑过。
 
 ```go
+var once sync.Once
+var msg string
+
+func load() {
+	once.Do(func() { msg = "hello" })
+}
+
+// 任意个 goroutine 都可以调用。Do 返回之后再读 msg。
+load()
+println(msg) // hello
+```
+
+下面这段不是推荐写法，不要照抄。它想少调用 `Do`：函数跑完后把普通 `bool` 设为 `true`，其他 goroutine 看见 `done` 就跳过 `Do`。这个 `bool` 接不上 `Once` 的同步。看见 `done == true` 时，可能还没看见 `msg = "hello"`，而这次又没进入 `Do`，`Once` 的边用不上。`done` 的读写本身也是数据竞争。两个 goroutine 同时执行它时，检测器报 `done = true` 和 `if !done` 竞争。验证时外面套了 1000 次循环，并用 `WaitGroup` 等两边都跑起来。
+
+```go
+// 错误示例：普通 bool 包住 Once，会报 DATA RACE。
 if !done {
 	once.Do(func() {
 		msg = "hello"
@@ -282,15 +320,20 @@ func TestWaitGroup(t *testing.T) {
 普通 `bool` 上忙等没有这条边。`done = true` 和 `for !done` 是一对竞争。这个循环也不保证能结束：没有同步事件时，主 goroutine 可以一直看不见那次写。这次检测器配上的就是这两行，进程以状态 66 退出。
 
 ```go
-var done bool
-var msg string
-go func() {
-	msg = "hello"
-	done = true
-}()
-for !done {
+// go run -race main.go
+package main
+
+func main() {
+	var done bool
+	var msg string
+	go func() {
+		msg = "hello"
+		done = true
+	}()
+	for !done {
+	}
+	println(msg)
 }
-println(msg)
 ```
 
 换成原子标志之后，先写数据，再 `Store`。`Load` 观察到这次存储，再读数据。还没观察到 `true` 的 `Load` 不从这次 `Store` 得到边。
@@ -314,15 +357,41 @@ func TestAtomicPublish(t *testing.T) {
 `Store` 若写在数据前面，`Load` 看见 `true` 也接不上数据那次写。检测器报的是 `msg` 上的竞争：写入在 `ready.Store(true)` 之后，读取在 `Load` 返回 true 之后。
 
 ```go
-var msg string
-var ready atomic.Bool
-go func() {
-	ready.Store(true)
-	msg = "hello"
-}()
-for !ready.Load() {
+package main
+
+import "sync/atomic"
+
+func main() {
+	var msg string
+	var ready atomic.Bool
+	go func() {
+		ready.Store(true)
+		msg = "hello"
+	}()
+	for !ready.Load() {
+	}
+	println(msg)
 }
-println(msg)
+
+// go run -race main.go
+// ==================
+// WARNING: DATA RACE
+// Read at 0x00c00019c000 by main goroutine:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:14 +0x134
+
+// Previous write at 0x00c00019c000 by goroutine 6:
+//   main.main.func1()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:10 +0x44
+
+// Goroutine 6 (finished) created at:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:8 +0x11c
+// ==================
+// hello
+// Found 1 data race(s)
+// exit status 66
+
 ```
 
 发布整个对象时，字段先填完，再 `Store` 指针。`Load` 得到非 nil 之后，字段已经在这次存储之前写好。
@@ -351,15 +420,52 @@ func TestAtomicPointer(t *testing.T) {
 指针若是普通变量，空转到非 nil 再读字段，指针本身的读写就是竞争。循环即便能退出，看见非 nil 也不包含字段已经写完。
 
 ```go
+package main
+
 type box struct{ msg string }
 
-var g *box
-go func() {
-	g = &box{msg: "hello"}
-}()
-for g == nil {
+func main() {
+	var g *box
+	go func() {
+		g = &box{msg: "hello"}
+	}()
+	for g == nil {
+	}
+	println(g.msg)
 }
-println(g.msg)
+
+// go run -race main.go
+// ==================
+// WARNING: DATA RACE
+// Write at 0x00c000182008 by goroutine 6:
+//   main.main.func1()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:8 +0x6f
+
+// Previous read at 0x00c000182008 by main goroutine:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:10 +0xc8
+
+// Goroutine 6 (running) created at:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:7 +0xbe
+// ==================
+// ==================
+// WARNING: DATA RACE
+// Read at 0x00c000110000 by main goroutine:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:12 +0xec
+
+// Previous write at 0x00c000110000 by goroutine 6:
+//   main.main.func1()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:8 +0x3a
+
+// Goroutine 6 (running) created at:
+//   main.main()
+//       /Users/xushiying/Projects/lirui311012/go-ethereum/golang_demo/minichain/main.go:7 +0xbe
+// ==================
+// hello
+// Found 2 data race(s)
+// exit status 66
 ```
 
 ## Cond
@@ -369,18 +475,23 @@ println(g.msg)
 ```go
 func TestCond(t *testing.T) {
 	var mu sync.Mutex
-	cond := sync.NewCond(&mu)
+	cond := sync.NewCond(&mu) // 等待和唤醒都配合这把锁
 	var msg string
 	go func() {
-		mu.Lock()
-		msg = "hello"
-		cond.Signal()
-		mu.Unlock()
+		mu.Lock()     // 改条件前先拿锁，避免和下面的检查同时碰 msg
+		msg = "hello" // 在锁里把条件写成成立
+		cond.Signal() // 叫醒一个正在 Wait 的 goroutine。对方还没 Wait 的话，这次信号不保留
+		mu.Unlock()   // 放开锁。对方要重新拿到这把锁，才能从 Wait 返回
 	}()
 	mu.Lock()
-	for msg == "" {
+	for msg == "" { // 在锁里看条件，不成立才等
+		// 先放开 mu 再睡着。被 Signal 叫醒后重新锁上 mu，然后回到 for 再看一次 msg
 		cond.Wait()
 	}
+	// 出了循环时仍拿着锁，msg 已经是 "hello"。
+	// 对方先跑完：它 Unlock 之后，这里的 Lock 才看得到那次写入，for 直接跳过。
+	// 自己先拿到锁：msg 还是空的，进入 Wait，放开锁并睡着；对方写完 msg 再 Signal，
+	// Wait 重新锁上 mu 后回到 for，这次条件成立，才读 msg。
 	if msg != "hello" {
 		t.Fatalf("got %q", msg)
 	}
